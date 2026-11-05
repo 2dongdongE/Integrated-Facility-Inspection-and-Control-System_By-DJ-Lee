@@ -19,18 +19,16 @@ def init_google_sheet():
         "https://spreadsheets.google.com/feeds",
         "https://www.googleapis.com/auth/drive"
     ]
-    # Streamlit Secrets에서 인증 정보 불러오기
     secret_dict = dict(st.secrets["gcp_service_account"])
     creds = ServiceAccountCredentials.from_json_keyfile_dict(secret_dict, scope)
     client = gspread.authorize(creds)
     
-    # 스프레드시트 이름 (구글 드라이브에 생성한 시트 이름)
-    spreadsheet_name = st.secrets["gcp_service_account"].get("sheet_name", "Facility_Management_DB")
+    # 구글 시트 파일 이름("facility data")을 여기서 직접 엽니다
     sheet = client.open("facility data")
     return sheet
 
 try:
-    gc_sheet = client.open("facility data")
+    gc_sheet = init_google_sheet()
 except Exception as e:
     st.error(f"🚨 구글 시트 연결 실패: {e}. `.streamlit/secrets.toml` 설정을 확인해주세요.")
     st.stop()
