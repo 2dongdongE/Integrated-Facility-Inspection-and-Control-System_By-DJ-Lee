@@ -34,6 +34,7 @@ except Exception as e:
     st.stop()
 
 # 시트별 워크시트 가져오기 함수 (없으면 자동 생성)
+@st.cache_resource
 def get_worksheet(ws_name, default_headers):
     try:
         ws = gc_sheet.worksheet(ws_name)
