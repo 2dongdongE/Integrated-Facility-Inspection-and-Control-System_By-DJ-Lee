@@ -30,7 +30,7 @@ def init_google_sheet():
     return sheet
 
 try:
-    gc_sheet = init_google_sheet()
+    gc_sheet = client.open("facility data")
 except Exception as e:
     st.error(f"🚨 구글 시트 연결 실패: {e}. `.streamlit/secrets.toml` 설정을 확인해주세요.")
     st.stop()
