@@ -26,7 +26,7 @@ def init_google_sheet():
     
     # 스프레드시트 이름 (구글 드라이브에 생성한 시트 이름)
     spreadsheet_name = st.secrets["gcp_service_account"].get("sheet_name", "Facility_Management_DB")
-    sheet = client.open(spreadsheet_name)
+    sheet = client.open("facility data")
     return sheet
 
 try:
