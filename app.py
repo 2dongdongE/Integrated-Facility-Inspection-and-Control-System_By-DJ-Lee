@@ -1309,4 +1309,4 @@ elif menu == "⚡ 유틸리티 사용량 관리":
             if not rn.strip():
                 st.error("성명 입력")
             else:
-                save_utility_usage(str
+                save_utility_usage(str)
