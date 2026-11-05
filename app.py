@@ -129,10 +129,14 @@ def get_utility_unit(u_type):
 # ----------------------------------------------------
 # 3. 구글 시트 기반 데이터베이스 초기화 및 설정 관리
 # ----------------------------------------------------
+@st.cache_data(ttl=60)
+def load_admin_users():
+    ws = get_worksheet("admin_users", ["id", "username", "password_hash", "name", "dept", "role", "approved", "created_at"])
+    return ws.get_all_records()
 def init_db():
     # 1. admin_users
-    ws_user = get_worksheet("admin_users", ["id", "username", "password_hash", "name", "dept", "role", "approved", "created_at"])
-    df_user = pd.DataFrame(ws_user.get_all_records())
+    records = load_admin_users()
+    df_user = pd.DataFrame(records)
     if df_user.empty or not (df_user["username"] == "dolee").any():
         master_id = int(df_user["id"].max()) + 1 if not df_user.empty and "id" in df_user.columns and pd.notna(df_user["id"].max()) else 1
         ws_user.append_row([master_id, "dolee", hash_pw("2051"), "마스터 관리자", "", "master", 1, datetime.now().strftime("%Y-%m-%d %H:%M:%S")])
