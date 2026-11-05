@@ -1,0 +1,7 @@
+Plaintext
+streamlit
+pandas
+qrcode
+Pillow
+gspread
+oauth2client

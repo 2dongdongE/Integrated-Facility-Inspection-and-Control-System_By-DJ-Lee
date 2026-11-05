@@ -1,0 +1,27 @@
+🚀 배포 전 필수 준비 사항 (구글 클라우드 & Streamlit 설정)
+구글 시트 연동을 정상 작동시키려면 두 가지 설정이 반드시 필요합니다:
+
+구글 서비스 계정(Service Account) 생성 및 권한 부여:
+
+Google Cloud Console에서 서비스 계정을 만들고 JSON 키 파일을 발급받습니다.
+
+구글 드라이브에 새 스프레드시트를 만들고(예: 시트 이름을 Facility_Management_DB로 지정), 발급받은 서비스 계정 이메일(...@...iam.gserviceaccount.com)에게 편집자(Editor) 권한을 공유합니다.
+
+Streamlit Cloud Secrets 설정 (secrets.toml):
+
+Streamlit Cloud의 앱 설정(Settings -> Secrets)에 아래와 같이 본인의 구글 서비스 계정 JSON 내용을 입력해 줍니다.
+
+Ini, TOML
+[gcp_service_account]
+type = "service_account"
+project_id = "your-project-id"
+private_key_id = "your-private-key-id"
+private_key = "-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n"
+client_email = "your-service-account-email@...iam.gserviceaccount.com"
+client_id = "your-client-id"
+auth_uri = "https://accounts.google.com/o/oauth2/auth"
+token_uri = "https://oauth2.googleapis.com/token"
+auth_provider_x509_cert_url = "https://www.googleapis.com/oauth2/v1/certs"
+client_x509_cert_url = "your-cert-url"
+sheet_name = "Facility_Management_DB"
+위 코드를 VS Code에 반영하고 깃허브에 푸시하시면, 이제 앱이 재시작되거나 클라우드 환경이 리프레시되어도 데이터가 구글 시트에 안전하게 영구 보존됩니다! 추가로 궁금한 점이 있으시면 언제든 말씀해주세요.

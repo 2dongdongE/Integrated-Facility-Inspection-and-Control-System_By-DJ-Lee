@@ -1,0 +1,7 @@
+PC 옮기고 작업 
+
+먼저 VS code에서 파이썬 라이브러리 설치 
+
+1. 터미널에 패키지 설치 명령어 입력: pip install streamlit pandas pillow qrcode
+
+2. 앱 다시 실행하기: python -m streamlit run app.py
