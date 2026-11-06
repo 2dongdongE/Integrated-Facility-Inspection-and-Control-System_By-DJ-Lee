@@ -92,14 +92,21 @@ def get_utility_unit(u_type):
     else:
         return "Ton"
 
-# --- 구글 시트 실시간 자동 저장 함수 ---
+# --- 구글 스프레드시트 실시간 자동 업로드 함수 ---
 def get_gspread_client():
     try:
         import gspread
         if "gcp_json" in st.secrets:
-            return gspread.service_account_from_dict(json.loads(st.secrets["gcp_json"]))
+            raw = st.secrets["gcp_json"]
+            creds_dict = json.loads(raw) if isinstance(raw, str) else dict(raw)
+            if "private_key" in creds_dict:
+                creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
+            return gspread.service_account_from_dict(creds_dict)
         if "gcp_service_account" in st.secrets:
-            return gspread.service_account_from_dict(dict(st.secrets["gcp_service_account"]))
+            creds_dict = dict(st.secrets["gcp_service_account"])
+            if "private_key" in creds_dict:
+                creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
+            return gspread.service_account_from_dict(creds_dict)
         base_dir = os.path.dirname(os.path.abspath(__file__))
         local_key = os.path.join(base_dir, "service_account.json")
         if os.path.exists(local_key):
