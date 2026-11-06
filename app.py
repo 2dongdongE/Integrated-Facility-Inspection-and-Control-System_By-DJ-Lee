@@ -102,7 +102,7 @@ def get_utility_unit(u_type):
     else:
         return "Ton"
 
-# --- 구글 시트 연동 핵심 함수 ---
+# --- 구글 시트 연동 핵심 함수 (저장, 수정, 삭제) ---
 def get_gspread_client():
     try:
         import gspread
@@ -131,16 +131,58 @@ def append_to_sheet(sheet_name: str, row_values: list):
     try:
         gc = get_gspread_client()
         if not gc:
-            st.session_state["sheet_alert"] = ("warning", "⚠️ 구글 연동 키가 없습니다. Streamlit Cloud의 Settings -> Secrets에 키(gcp_json)가 등록되어 있는지 확인하세요.")
             return
-            
         sh = gc.open("facility data")
         ws = sh.worksheet(sheet_name)
         clean_values = [str(v) if not isinstance(v, (int, float)) else v for v in row_values]
         ws.append_row(clean_values, value_input_option='USER_ENTERED')
-        st.session_state["sheet_alert"] = ("success", f" 구글 시트('{sheet_name}')에 정상적으로 자동 저장되었습니다!")
     except Exception as e:
-        st.session_state["sheet_alert"] = ("error", f"🚨 [구글 시트 저장 실패 상세 원인]: {e}")
+        st.session_state["sheet_alert"] = ("error", f"🚨 [구글 시트 저장 실패]: {e}")
+
+def delete_row_from_sheet(sheet_name: str, target_id):
+    try:
+        gc = get_gspread_client()
+        if not gc:
+            return
+        sh = gc.open("facility data")
+        ws = sh.worksheet(sheet_name)
+        col1_vals = ws.col_values(1)
+        target_str = str(target_id)
+        for idx, val in enumerate(col1_vals):
+            if val == target_str:
+                ws.delete_rows(idx + 1)
+                break
+    except Exception as e:
+        st.session_state["sheet_alert"] = ("error", f"🚨 [구글 시트 행 삭제 실패]: {e}")
+
+def update_cell_by_id(sheet_name: str, target_id, col_idx: int, new_value):
+    try:
+        gc = get_gspread_client()
+        if not gc:
+            return
+        sh = gc.open("facility data")
+        ws = sh.worksheet(sheet_name)
+        col1_vals = ws.col_values(1)
+        target_str = str(target_id)
+        for idx, val in enumerate(col1_vals):
+            if val == target_str:
+                ws.update_cell(idx + 1, col_idx, new_value)
+                break
+    except Exception as e:
+        st.session_state["sheet_alert"] = ("error", f"🚨 [구글 시트 셀 업데이트 실패]: {e}")
+
+def clear_sheet_records(sheet_name: str):
+    try:
+        gc = get_gspread_client()
+        if not gc:
+            return
+        sh = gc.open("facility data")
+        ws = sh.worksheet(sheet_name)
+        all_vals = ws.get_all_values()
+        if len(all_vals) > 1:
+            ws.delete_rows(2, len(all_vals))
+    except Exception as e:
+        st.session_state["sheet_alert"] = ("error", f"🚨 [구글 시트 전체 삭제 실패]: {e}")
 
 # ----------------------------------------------------
 # 3. 통합 데이터베이스 초기화 및 조작 함수
@@ -344,12 +386,16 @@ def approve_admin_request(user_id):
     conn.execute("UPDATE admin_users SET approved = 1 WHERE id = ?", (user_id,))
     conn.commit()
     conn.close()
+    # 구글 시트 approved 컬럼(7번째 열)을 1로 업데이트
+    update_cell_by_id("admin_users", user_id, 7, 1)
 
 def reject_or_delete_user(user_id):
     conn = sqlite3.connect(db_path)
     conn.execute("DELETE FROM admin_users WHERE id = ? AND role != 'master'", (user_id,))
     conn.commit()
     conn.close()
+    # 구글 시트에서 해당 사용자 행 삭제
+    delete_row_from_sheet("admin_users", user_id)
 
 def get_all_approved_users():
     conn = sqlite3.connect(db_path)
@@ -373,12 +419,14 @@ def mark_as_resolved(history_id):
     conn.execute("UPDATE inspection_history SET resolved = 1 WHERE id = ?", (history_id,))
     conn.commit()
     conn.close()
+    update_cell_by_id("inspection_history", history_id, 7, 1)
 
 def delete_inspection_history(history_id):
     conn = sqlite3.connect(db_path)
     conn.execute("DELETE FROM inspection_history WHERE id = ?", (history_id,))
     conn.commit()
     conn.close()
+    delete_row_from_sheet("inspection_history", history_id)
 
 def delete_all_inspection_history():
     conn = sqlite3.connect(db_path)
@@ -386,6 +434,7 @@ def delete_all_inspection_history():
     conn.execute("DELETE FROM sqlite_sequence WHERE name='inspection_history'")
     conn.commit()
     conn.close()
+    clear_sheet_records("inspection_history")
 
 def add_extinguisher(ext_id_val, location):
     conn = sqlite3.connect(db_path)
@@ -427,6 +476,7 @@ def delete_exact_daily_log(log_id):
     conn.execute("DELETE FROM daily_exact_inspection WHERE id = ?", (log_id,))
     conn.commit()
     conn.close()
+    delete_row_from_sheet("daily_exact_inspection", log_id)
 
 def delete_all_exact_daily_logs():
     conn = sqlite3.connect(db_path)
@@ -434,6 +484,7 @@ def delete_all_exact_daily_logs():
     conn.execute("DELETE FROM sqlite_sequence WHERE name='daily_exact_inspection'")
     conn.commit()
     conn.close()
+    clear_sheet_records("daily_exact_inspection")
 
 def get_all_extinguishers():
     conn = sqlite3.connect(db_path)
@@ -489,6 +540,7 @@ def delete_utility_usage(util_id):
     conn.execute("DELETE FROM utility_usage WHERE id = ?", (util_id,))
     conn.commit()
     conn.close()
+    delete_row_from_sheet("utility_usage", util_id)
 
 def delete_all_utility_usage():
     conn = sqlite3.connect(db_path)
@@ -496,6 +548,7 @@ def delete_all_utility_usage():
     conn.execute("DELETE FROM sqlite_sequence WHERE name='utility_usage'")
     conn.commit()
     conn.close()
+    clear_sheet_records("utility_usage")
 
 def save_confined_space_log(record_date, inspector, q_data, notes):
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -520,6 +573,7 @@ def delete_confined_space_log(log_id):
     conn.execute("DELETE FROM confined_space_inspection WHERE id = ?", (log_id,))
     conn.commit()
     conn.close()
+    delete_row_from_sheet("confined_space_inspection", log_id)
 
 def delete_all_confined_space_logs():
     conn = sqlite3.connect(db_path)
@@ -527,6 +581,7 @@ def delete_all_confined_space_logs():
     conn.execute("DELETE FROM sqlite_sequence WHERE name='confined_space_inspection'")
     conn.commit()
     conn.close()
+    clear_sheet_records("confined_space_inspection")
 
 def save_fire_pump_log(record_date, category, inspector, q_data, notes):
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -551,6 +606,7 @@ def delete_fire_pump_log(log_id):
     conn.execute("DELETE FROM fire_pump_inspection WHERE id = ?", (log_id,))
     conn.commit()
     conn.close()
+    delete_row_from_sheet("fire_pump_inspection", log_id)
 
 def delete_all_fire_pump_logs():
     conn = sqlite3.connect(db_path)
@@ -558,6 +614,7 @@ def delete_all_fire_pump_logs():
     conn.execute("DELETE FROM sqlite_sequence WHERE name='fire_pump_inspection'")
     conn.commit()
     conn.close()
+    clear_sheet_records("fire_pump_inspection")
 
 def get_recent_inspection_this_month(ext_id_val):
     conn = sqlite3.connect(db_path)
@@ -1301,6 +1358,7 @@ elif menu == "📋 일일 통합 점검":
                         'p_off_p': p_off_p, 'p_off_n': p_off_n, 'p_off_s': p_off_s,
                         'etc_notes': etc_notes.strip()
                     })
+                    st.success("✅ 저장 완료!")
                     st.rerun()
 
     with t2:
