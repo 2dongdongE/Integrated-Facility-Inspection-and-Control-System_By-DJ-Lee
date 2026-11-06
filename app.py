@@ -9,47 +9,6 @@ from PIL import Image, ImageDraw, ImageFont
 import hashlib
 import os
 import json
-import gspread
-from oauth2client.service_account import ServiceAccountCredentials
-
-# ----------------------------------------------------
-# 0. 구글 시트(Google Sheets) 연동 및 백업 설정
-# ----------------------------------------------------
-SPREADSHEET_NAME = "facility data"
-
-def get_gspread_client():
-    """Streamlit Secrets 또는 로컬 service_account.json 파일에서 구글 인증 정보를 가져옵니다."""
-    scope = [
-        "https://spreadsheets.google.com/feeds",
-        "https://www.googleapis.com/auth/drive"
-    ]
-    try:
-        if "gcp_service_account" in st.secrets:
-            creds_dict = dict(st.secrets["gcp_service_account"])
-            creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
-            return gspread.authorize(creds)
-        
-        json_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "service_account.json")
-        if os.path.exists(json_path):
-            creds = ServiceAccountCredentials.from_json_keyfile_name(json_path, scope)
-            return gspread.authorize(creds)
-    except Exception as e:
-        print(f"구글 시트 인증 실패: {e}")
-    return None
-
-def backup_to_gspreadsheet(worksheet_name, row_data):
-    """구글 시트의 지정된 워크시트(탭)에 데이터를 행(Row)으로 추가합니다."""
-    try:
-        gc = get_gspread_client()
-        if gc:
-            sh = gc.open(SPREADSHEET_NAME)
-            try:
-                ws = sh.worksheet(worksheet_name)
-            except gspread.WorksheetNotFound:
-                ws = sh.add_worksheet(title=worksheet_name, rows=100, cols=20)
-            ws.append_row(row_data)
-    except Exception as e:
-        print(f"구글 시트 백업 중 오류 발생 ({worksheet_name}): {e}")
 
 # ----------------------------------------------------
 # 1. 페이지 레이아웃 및 스타일
@@ -132,6 +91,46 @@ def get_utility_unit(u_type):
         return "㎥"
     else:
         return "Ton"
+
+# --- 구글 스프레드시트 실시간 연동 (실패 원인 화면 출력) ---
+def get_gspread_client():
+    try:
+        import gspread
+        if "gcp_json" in st.secrets:
+            raw = st.secrets["gcp_json"]
+            creds_dict = json.loads(raw) if isinstance(raw, str) else dict(raw)
+            if "private_key" in creds_dict:
+                creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
+            return gspread.service_account_from_dict(creds_dict)
+            
+        if "gcp_service_account" in st.secrets:
+            creds_dict = dict(st.secrets["gcp_service_account"])
+            if "private_key" in creds_dict:
+                creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
+            return gspread.service_account_from_dict(creds_dict)
+
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        local_key = os.path.join(base_dir, "service_account.json")
+        if os.path.exists(local_key):
+            return gspread.service_account(filename=local_key)
+    except Exception as e:
+        st.error(f"🚨 [구글 인증 키 파싱 오류]: {e}")
+    return None
+
+def append_to_sheet(sheet_name: str, row_values: list):
+    try:
+        gc = get_gspread_client()
+        if not gc:
+            st.warning("⚠️ 구글 인증 정보를 찾을 수 없습니다. (Streamlit Cloud의 Settings -> Secrets에 키가 등록되어 있는지 확인해주세요.)")
+            return
+            
+        sh = gc.open("facility data")
+        ws = sh.worksheet(sheet_name)
+        clean_values = [str(v) if not isinstance(v, (int, float)) else v for v in row_values]
+        ws.append_row(clean_values, value_input_option='USER_ENTERED')
+        st.toast(f" 구글 시트({sheet_name})에 성공적으로 저장되었습니다!")
+    except Exception as e:
+        st.error(f"🚨 [구글 시트 저장 실패]: {e}")
 
 # ----------------------------------------------------
 # 3. 통합 데이터베이스 초기화 및 조작 함수
@@ -309,11 +308,15 @@ def authenticate_user(username, password):
     return {"username": user[0], "name": user[1], "role": user[2], "approved": user[3]} if user else None
 
 def register_admin_request(username, password, name):
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     conn = sqlite3.connect(db_path)
     try:
-        conn.execute("INSERT INTO admin_users (username, password_hash, name, dept, role, approved, created_at) VALUES (?, ?, ?, '', 'admin', 0, ?)", 
-                     (username.strip(), hash_pw(password), name.strip(), datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+        cur = conn.cursor()
+        cur.execute("INSERT INTO admin_users (username, password_hash, name, dept, role, approved, created_at) VALUES (?, ?, ?, '', 'admin', 0, ?)", 
+                     (username.strip(), hash_pw(password), name.strip(), now_str))
+        new_id = cur.lastrowid
         conn.commit()
+        append_to_sheet("admin_users", [new_id, username.strip(), hash_pw(password), name.strip(), '', 'admin', 0, now_str])
         return True
     except:
         return False
@@ -347,14 +350,13 @@ def get_all_approved_users():
 def save_inspection(ext_id_val, inspector, status, notes):
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     conn = sqlite3.connect(db_path)
-    cursor = conn.cursor()
-    cursor.execute('INSERT INTO inspection_history (ext_id, inspector, status, notes, timestamp, resolved) VALUES (?, ?, ?, ?, ?, 0)', 
-                   (ext_id_val, inspector, status, notes, now_str))
-    new_id = cursor.lastrowid
+    cur = conn.cursor()
+    cur.execute('INSERT INTO inspection_history (ext_id, inspector, status, notes, timestamp, resolved) VALUES (?, ?, ?, ?, ?, 0)', 
+                 (ext_id_val, inspector, status, notes, now_str))
+    new_id = cur.lastrowid
     conn.commit()
     conn.close()
-    
-    backup_to_gspreadsheet("inspection_history", [new_id, ext_id_val, inspector, status, notes, now_str, 0])
+    append_to_sheet("inspection_history", [new_id, ext_id_val, inspector, status, notes, now_str, 0])
 
 def mark_as_resolved(history_id):
     conn = sqlite3.connect(db_path)
@@ -380,7 +382,7 @@ def add_extinguisher(ext_id_val, location):
     try:
         conn.execute("INSERT INTO extinguishers (ext_id, location) VALUES (?, ?)", (ext_id_val, location))
         conn.commit()
-        backup_to_gspreadsheet("extinguishers", [ext_id_val, location])
+        append_to_sheet("extinguishers", [ext_id_val, location])
         return True
     except:
         return False
@@ -393,16 +395,16 @@ def save_exact_daily_log(d):
     cursor.execute("PRAGMA table_info(daily_exact_inspection)")
     cols = [row[1] for row in cursor.fetchall() if row[1] != 'id']
     d_copy = dict(d)
-    d_copy['timestamp'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    d_copy['timestamp'] = now_str
     c_in = [c for c in cols if c in d_copy]
     v_in = [d_copy[c] for c in c_in]
     cursor.execute(f"INSERT INTO daily_exact_inspection ({', '.join(c_in)}) VALUES ({', '.join(['?'] * len(v_in))})", v_in)
     new_id = cursor.lastrowid
     conn.commit()
     conn.close()
-    
-    gs_row = [new_id] + [d_copy.get(c, "") for c in cols]
-    backup_to_gspreadsheet("daily_exact_inspection", gs_row)
+    row_values = [new_id] + [d_copy.get(col, '') for col in cols]
+    append_to_sheet("daily_exact_inspection", row_values)
 
 def get_exact_daily_logs():
     conn = sqlite3.connect(db_path)
@@ -465,14 +467,12 @@ def get_utility_df():
 
 def save_utility_usage(record_date, utility_type, consumption, recorder, notes):
     conn = sqlite3.connect(db_path)
-    cursor = conn.cursor()
-    cursor.execute('INSERT INTO utility_usage (record_date, utility_type, consumption, recorder, notes) VALUES (?, ?, ?, ?, ?)', 
-                   (record_date, utility_type, consumption, recorder, notes))
-    new_id = cursor.lastrowid
+    cur = conn.cursor()
+    cur.execute('INSERT INTO utility_usage (record_date, utility_type, consumption, recorder, notes) VALUES (?, ?, ?, ?, ?)', (record_date, utility_type, consumption, recorder, notes))
+    new_id = cur.lastrowid
     conn.commit()
     conn.close()
-    
-    backup_to_gspreadsheet("utility_usage", [new_id, record_date, utility_type, consumption, recorder, notes])
+    append_to_sheet("utility_usage", [new_id, str(record_date), utility_type, consumption, recorder, notes])
 
 def delete_utility_usage(util_id):
     conn = sqlite3.connect(db_path)
@@ -489,16 +489,15 @@ def delete_all_utility_usage():
 
 def save_confined_space_log(record_date, inspector, q_data, notes):
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    q_json = json.dumps(q_data, ensure_ascii=False)
+    q_str = json.dumps(q_data, ensure_ascii=False)
     conn = sqlite3.connect(db_path)
-    cursor = conn.cursor()
-    cursor.execute("INSERT INTO confined_space_inspection (record_date, inspector, q_data, notes, timestamp) VALUES (?, ?, ?, ?, ?)",
-                 (str(record_date), inspector.strip(), q_json, notes.strip(), now_str))
-    new_id = cursor.lastrowid
+    cur = conn.cursor()
+    cur.execute("INSERT INTO confined_space_inspection (record_date, inspector, q_data, notes, timestamp) VALUES (?, ?, ?, ?, ?)",
+                 (str(record_date), inspector.strip(), q_str, notes.strip(), now_str))
+    new_id = cur.lastrowid
     conn.commit()
     conn.close()
-    
-    backup_to_gspreadsheet("confined_space_inspection", [new_id, str(record_date), inspector.strip(), q_json, notes.strip(), now_str])
+    append_to_sheet("confined_space_inspection", [new_id, str(record_date), inspector.strip(), q_str, notes.strip(), now_str])
 
 def get_confined_space_logs():
     conn = sqlite3.connect(db_path)
@@ -521,16 +520,15 @@ def delete_all_confined_space_logs():
 
 def save_fire_pump_log(record_date, category, inspector, q_data, notes):
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    q_json = json.dumps(q_data, ensure_ascii=False)
+    q_str = json.dumps(q_data, ensure_ascii=False)
     conn = sqlite3.connect(db_path)
-    cursor = conn.cursor()
-    cursor.execute("INSERT INTO fire_pump_inspection (record_date, category, inspector, q_data, notes, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
-                 (str(record_date), category, inspector.strip(), q_json, notes.strip(), now_str))
-    new_id = cursor.lastrowid
+    cur = conn.cursor()
+    cur.execute("INSERT INTO fire_pump_inspection (record_date, category, inspector, q_data, notes, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
+                 (str(record_date), category, inspector.strip(), q_str, notes.strip(), now_str))
+    new_id = cur.lastrowid
     conn.commit()
     conn.close()
-    
-    backup_to_gspreadsheet("fire_pump_inspection", [new_id, str(record_date), category, inspector.strip(), q_json, notes.strip(), now_str])
+    append_to_sheet("fire_pump_inspection", [new_id, str(record_date), category, inspector.strip(), q_str, notes.strip(), now_str])
 
 def get_fire_pump_logs():
     conn = sqlite3.connect(db_path)
@@ -1289,7 +1287,7 @@ elif menu == "📋 일일 통합 점검":
                         'hot_p': hot_p, 'hot_t': hot_t, 'hot_stat': hot_stat,
                         'temp_mach': temp_mach, 'temp_outside': temp_outside,
                         'p_comp_p': p_comp_p, 'p_comp_n': p_comp_n, 'p_comp_s': p_comp_s,
-                        'p_fac_p': p_fac_n, 'p_fac_n': p_fac_n, 'p_fac_s': p_fac_s,
+                        'p_fac_p': p_fac_p, 'p_fac_n': p_fac_n, 'p_fac_s': p_fac_s,
                         'p_off_p': p_off_p, 'p_off_n': p_off_n, 'p_off_s': p_off_s,
                         'etc_notes': etc_notes.strip()
                     })
@@ -1675,7 +1673,7 @@ elif menu == "🧯 소방 펌프 및 밸브 점검":
                     q_data['q11'] = st.radio("12. 배터리 'B' 작동 여부 (수동작동)", ["Yes", "No"], disabled=not allow_fp, horizontal=True)
                 with fc2:
                     q_data['q12'] = st.text_input("13. 기동압력 (Unit: MPa)", disabled=not allow_fp)
-                    q_data['q13'] = st.text_input("14. 펌프 회전속도 (RPM)", disabled=not allow_fp)
+                    q_data['q13'] = st.text_input("14. 펌프 회전속도 (Unit: RPM)", disabled=not allow_fp)
                     q_data['q14'] = st.radio("15. 펌프 패킹 누수확인", ["Yes", "No"], disabled=not allow_fp, horizontal=True)
                     q_data['q15'] = st.text_input("16. 엔진펌프 기동 시 쿨링 압력 (Unit: kPa)", disabled=not allow_fp)
                     q_data['q16'] = st.text_input("17. 엔진펌프 가동 시 오일 압력 (Unit: kPa)", disabled=not allow_fp)
