@@ -194,7 +194,7 @@ def restore_data_from_sheets():
         conn = sqlite3.connect(db_path)
         cursor = conn.cursor()
 
-        # 1. 소화기 자산 (extinguishers)
+        # 1. 소화기 자산
         try:
             ws = sh.worksheet("extinguishers")
             rows = ws.get_all_values()[1:]
@@ -203,7 +203,7 @@ def restore_data_from_sheets():
                     cursor.execute("INSERT OR REPLACE INTO extinguishers (ext_id, location) VALUES (?, ?)", (r[0].strip(), r[1].strip()))
         except Exception: pass
 
-        # 2. 소화기 점검 이력 (inspection_history)
+        # 2. 소화기 점검 이력
         try:
             ws = sh.worksheet("inspection_history")
             rows = ws.get_all_values()[1:]
@@ -215,7 +215,7 @@ def restore_data_from_sheets():
                         (int(r[0]), r[1], r[2], r[3], r[4], r[5], int(r[6]) if r[6].isdigit() else 0))
         except Exception: pass
 
-        # 3. 유틸리티 검침 데이터 (utility_usage)
+        # 3. 유틸리티 검침 데이터
         try:
             ws = sh.worksheet("utility_usage")
             rows = ws.get_all_values()[1:]
@@ -227,7 +227,7 @@ def restore_data_from_sheets():
                         (int(r[0]), r[1], r[2], float(r[3]) if r[3] else 0.0, r[4], r[5]))
         except Exception: pass
 
-        # 4. 일일 설비 점검 일지 (daily_exact_inspection)
+        # 4. 일일 설비 점검 일지
         try:
             ws = sh.worksheet("daily_exact_inspection")
             header = ws.row_values(1)
@@ -243,7 +243,7 @@ def restore_data_from_sheets():
                         cursor.execute(f"INSERT OR REPLACE INTO daily_exact_inspection ({col_names}) VALUES ({placeholders})", vals[:len(cols)])
         except Exception: pass
 
-        # 5. 밀폐공간 점검표 (confined_space_inspection)
+        # 5. 밀폐공간 점검표
         try:
             ws = sh.worksheet("confined_space_inspection")
             rows = ws.get_all_values()[1:]
@@ -255,7 +255,7 @@ def restore_data_from_sheets():
                         (int(r[0]), r[1], r[2], r[3], r[4], r[5]))
         except Exception: pass
 
-        # 6. 소방펌프 및 밸브 점검표 (fire_pump_inspection)
+        # 6. 소방펌프 및 밸브 점검표
         try:
             ws = sh.worksheet("fire_pump_inspection")
             rows = ws.get_all_values()[1:]
@@ -267,7 +267,7 @@ def restore_data_from_sheets():
                         (int(r[0]), r[1], r[2], r[3], r[4], r[5], r[6]))
         except Exception: pass
 
-        # 7. 관리자 계정 명부 (admin_users)
+        # 7. 관리자 계정 명부
         try:
             ws = sh.worksheet("admin_users")
             rows = ws.get_all_values()[1:]
@@ -286,38 +286,8 @@ def restore_data_from_sheets():
         return False, f"데이터 복원 실패: {e}"
 
 # ----------------------------------------------------
-# 3. 통합 데이터베이스 초기화 및 조작 함수
+# 3. 통합 데이터베이스 초기화
 # ----------------------------------------------------
-def seed_test_utility_data(conn):
-    cursor = conn.cursor()
-    cursor.execute("DELETE FROM utility_usage")
-    today = date.today()
-    for i in range(365, -1, -1):
-        record_d = str(today - timedelta(days=i))
-        water_main = 1000 + (365 - i) * 20
-        if i == 0:
-            water_main += 30  
-            notes_main = '🚨 금일 이상 검침 (50톤 누수 급증)'
-        else:
-            notes_main = '평일 정기 검침 (일 20톤)'
-        cursor.execute("INSERT INTO utility_usage (record_date, utility_type, consumption, recorder, notes) VALUES (?, '상수도(메인)', ?, '관리자', ?)", (record_d, water_main, notes_main))
-        
-        water_rest = 200 + (365 - i) * 5
-        cursor.execute("INSERT INTO utility_usage (record_date, utility_type, consumption, recorder, notes) VALUES (?, '상수도(식당)', ?, '관리자', '정상 검침')", (record_d, water_rest))
-        
-        gw = 500 + (365 - i) * 10
-        cursor.execute("INSERT INTO utility_usage (record_date, utility_type, consumption, recorder, notes) VALUES (?, '지하수', ?, '관리자', '정상 검침')", (record_d, gw))
-        
-        purified = 100 + (365 - i) * 2
-        cursor.execute("INSERT INTO utility_usage (record_date, utility_type, consumption, recorder, notes) VALUES (?, '정수', ?, '관리자', '정상 검침')", (record_d, purified))
-        
-        elec = 5000 + (365 - i) * 150
-        cursor.execute("INSERT INTO utility_usage (record_date, utility_type, consumption, recorder, notes) VALUES (?, '전기사용량', ?, '관리자', '정상 검침')", (record_d, elec))
-        
-        lpg = 300 + (365 - i) * 8
-        cursor.execute("INSERT INTO utility_usage (record_date, utility_type, consumption, recorder, notes) VALUES (?, 'LPG가스', ?, '관리자', '정상 검침')", (record_d, lpg))
-    conn.commit()
-
 def init_db():
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
@@ -403,53 +373,6 @@ def init_db():
                        (hash_pw("2051"), datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
         conn.commit()
 
-    cursor.execute("SELECT COUNT(*) FROM extinguishers")
-    if cursor.fetchone()[0] < 181:
-        cursor.execute("DELETE FROM extinguishers")
-        initial_extinguishers = [
-            ("ETC-1", "정문 경비실"), ("1-1-1", "중앙현관 1"), ("1-1-2", "중앙현관 2"), ("1-1-3", "전산 서버실"), ("1-1-4", "1층 사무실 1"),
-            ("1-1-5", "1층 교육장 1"), ("1-1-6", "1층 교육장 2"), ("1-1-7", "1층사무실2"), ("1-2-1", "재무 문서고"), ("1-2-2", "2층 사무실 1"),
-            ("1-2-3", "2층 사무실 2"), ("1-2-4", "2층 사무실 3"), ("1-2-5", "2층 사무실 4"), ("1-2-6", "2층 사무실 5"), ("1-2-7", "2층 복도 1"),
-            ("1-2-8", "2층 복도 2"), ("1-2-9", "2층 사무실 1"), ("1-2-10", "2층사무실 2"), ("1-2-11", "2층사무실 3"), ("1-2-12", "2층사무실 4"),
-            ("1-1-8", "29S측 탈의실"), ("1-1-9", "방화문 29S"), ("1-1-10", "방화문 29S"), ("1-1-11", "23S B1"), ("1-1-12", "23S B2"),
-            ("1-1-13", "23S B2"), ("1-1-14", "식당 홀 1"), ("1-1-15", "식당 홀 2"), ("1-1-16", "조리실 1"), ("1-1-17", "조리실 2"),
-            ("1-1-18", "29S 1"), ("1-1-19", "29S 2"), ("1-1-20", "29S 3"), ("1-1-21", "29S 4"), ("1-1-22", "ALT A"),
-            ("1-1-23", "Alt B"), ("1-1-24", "방화문 Alt 1"), ("1-1-25", "방화문 Alt 2"), ("1-1-26", "IDM 1"), ("1-1-27", "IDM 2"),
-            ("1-1-28", "IDM 3"), ("1-1-29", "방화문 IDM1"), ("1-1-30", "방화문 IDM2"), ("1-1-31", "탈의실 IDM"), ("1-1-32", "공무작업실"),
-            ("1-1-33", "자재 자동문"), ("1-1-34", "자재 사무실"), ("1-1-35", "직장 사무실"), ("1-1-36", "품질 사무실1"), ("1-1-37", "품질 사무실2"),
-            ("1-1-38", "완제품 탈의실"), ("1-1-39", "완제품 방화문"), ("1-1-40", "완제품 방화문"), ("1-1-41", "완제품 창고1"), ("1-1-42", "완제품 창고2"),
-            ("1-1-43", "완제품 창고3"), ("1-1-44", "B Line 방화문1"), ("1-1-45", "B Line 방화문2"), ("1-1-46", "구DG 방화문1"), ("1-1-47", "구DG 방화문2"),
-            ("1-1-48", "구DG 탈의실"), ("ETC-62", "PG측 파고라"), ("ETC-63", "후문 경비실"), ("ETC-64", "완제품 지게차 1"), ("ETC-65", "완제품 지게차 2"),
-            ("ETC-66", "공박스 보관소 1"), ("ETC-67", "공박스 보관소 2"), ("ETC-68", "공박스 보관소 3"), ("ETC-69", "자재창고 앞 파고라"), ("ETC-70", "시편 측정대 1"),
-            ("ETC-71", "시편 측정대 2"), ("ETC-72", "하역장 1"), ("ETC-73", "하역장 2"), ("ETC-74", "지게차 충전소1"), ("ETC-75", "지게차 충전소2"),
-            ("ETC-76", "시설 창고"), ("ETC-77", "유류저장소 1"), ("ETC-78", "유류저장소 2"), ("ETC-79", "유류저장소 3"), ("ETC-80", "유류저장소 4"),
-            ("ETC-81", "기계실 1"), ("ETC-82", "기계실 2"), ("ETC-83", "기계실 3"), ("ETC-84", "기계실 4"), ("ETC-85", "기계실 5"),
-            ("ETC-86", "기계실 6"), ("ETC-87", "전기실 1"), ("ETC-88", "전기실 2"), ("ETC-89", "전기실 3"), ("ETC-90", "전기실 4"),
-            ("ETC-91", "전기실 5"), ("ETC-92", "Engine Test Room 1"), ("ETC-93", "Engine Test Room 2"), ("ETC-94", "Engine Test Room 3"), ("ETC-95", "Engine Test Room 4"),
-            ("ETC-96", "외국인 휴게실"), ("ETC-97", "CFS 창고 1"), ("ETC-98", "CFS 창고 2"), ("ETC-99", "CFS 창고 3"), ("ETC-100", "QA Lab 1"),
-            ("ETC-101", "QA Lab 2"), ("ETC-102", "QA Lab 3"), ("ETC-103", "LPG 탱크 1"), ("ETC-104", "LPG 탱크 2"), ("ETC-105", "DR23S A 외부1"),
-            ("ETC-106", "DR23S A 외부2"), ("10-1-1", "DR23S A 내부1"), ("10-1-2", "DR23S A 내부2"), ("10-1-3", "DR23S A 내부3"), ("10-1-4", "DR23S A 내부4"),
-            ("10-1-5", "DR23S A 내부5"), ("10-1-6", "DR23S A 내부6"), ("ETC-113", "신축동 앞 파고라"), ("ETC-114", "신축동 측 집진기"), ("10-1-7", "신축동 로비"),
-            ("10-1-8", "신축동 1F 1"), ("10-1-9", "신축동 1F 2"), ("10-1-10", "신축동 1F 3"), ("10-1-11", "신축동 1F 4"), ("10-1-12", "진동시험실"),
-            ("10-1-13", "충격내구"), ("10-1-14", "내구시험실 1"), ("10-1-15", "내구시험실 2"), ("10-1-16", "내구시험실 3"), ("10-1-17", "무향실"),
-            ("10-1-18", "부식시험실"), ("10-2-1", "신축동 2F 1"), ("10-2-2", "신축동 2F 2"), ("10-2-3", "시작품제작실 1"), ("10-2-4", "시작품제작실 2"),
-            ("10-2-5", "시작품제작실 3"), ("12-1-1", "1F 로비"), ("12-1-2", "휴게실"), ("12-1-3", "측정실"), ("ETC-135", "위험물옥내저장소 1"),
-            ("ETC-136", "위험물옥내저장소 2"), ("ETC-137", "위험물옥내저장소 3"), ("ETC-138", "위험물옥내저장소 4"), ("ETC-139", "위험물옥내저장소 5"), ("12-1-4", "Stator 1"),
-            ("12-1-5", "Stator 2"), ("12-1-6", "Stator 3"), ("12-1-7", "Stator 4"), ("12-1-8", "Stator 5"), ("12-1-9", "Motor 1"),
-            ("12-1-10", "Motor 2"), ("12-1-11", "Motor 3"), ("12-1-12", "창고 1"), ("12-1-13", "창고 2"), ("12-1-14", "창고 3"),
-            ("12-1-15", "하역장 1"), ("12-1-16", "하역장 2"), ("12-1-17", "하역장 3"), ("12-1-18", "창고계단"), ("12-B1", "12동 B1, 펌프실"),
-            ("12-2-8", "2F 계단"), ("12-3-1", "3F 창고 1"), ("12-3-2", "3F 창고 2"), ("12-3-3", "3F 창고 3"), ("12-3-4", "3F보관소 1"),
-            ("12-3-5", "3F보관소 2"), ("12-3-6", "3F보관소 3"), ("12-3-7", "3F보관소 4"), ("12-3-8", "3F Invt 1"), ("12-3-9", "3F Invt 2"),
-            ("12-3-10", "3F Invt 3"), ("12-3-11", "3F Invt 4"), ("12-3-12", "3F 전산실"), ("12-3-13", "3F 복도"), ("12-3-14", "Invt 입구"),
-            ("12-3-15", "Invt 방풍실"), ("12-3-16", "분석실"), ("12-3-17", "회의실"), ("12-3-18", "휴게실"), ("12-2-1", "2F 남자 탈의실"),
-            ("12-2-2", "2F 복도 1"), ("12-2-3", "2F 온수탱크실"), ("12-2-4", "2F 여자 탈의실"), ("12-2-5", "2F 복도 2"), ("12-2-6", "2F 제품연구팀"),
-            ("12-2-7", "2F 회의실")
-        ]
-        for i in range(len(initial_extinguishers) + 1, 182):
-            initial_extinguishers.append((f"EXT-{i:03d}", f"공장 설비 구역 #{i}"))
-        for ext_id_val, location in initial_extinguishers:
-            cursor.execute('INSERT OR IGNORE INTO extinguishers (ext_id, location) VALUES (?, ?)', (ext_id_val, location))
-        conn.commit()
     conn.close()
 
 def authenticate_user(username, password):
@@ -904,7 +827,7 @@ else:
     st.sidebar.markdown("---")
     st.sidebar.subheader("⚙️ 관리자 도구")
 
-    # [핵심 기능] 구글 시트 원클릭 전체 데이터 복원 기능
+    # [복원 기능] 구글 시트 원클릭 전체 데이터 복원 기능
     with st.sidebar.expander("🔄 구글 시트 데이터 복원", expanded=False):
         st.caption("서버 초기화 시 구글 시트에 누적된 모든 데이터를 앱 내부로 1초 만에 복구합니다.")
         if st.button("구글 시트 데이터 전체 복원 실행", use_container_width=True, key="btn_restore_all_from_sheets"):
@@ -1114,10 +1037,7 @@ if menu == "📊 통합 종합 대시보드":
     st.markdown("<div style='height:14px;'></div>", unsafe_allow_html=True)
 
     if u_df.empty:
-        st.info("등록된 검침 데이터가 없습니다. [유틸리티 사용량 관리] 메뉴에서 검침값을 등록하면 대시보드가 활성화됩니다.")
-        if is_admin and st.button("🧪 [검증용] 1년 치 유틸리티 데이터 자동 생성"):
-            seed_test_utility_data(sqlite3.connect(db_path))
-            st.rerun()
+        st.info("등록된 검침 데이터가 없습니다. [유틸리티 사용량 관리] 메뉴에서 실제 계량기 검침값을 등록하시면 대시보드 통계가 활성화됩니다.")
     else:
         uf = u_df.copy()
         uf['parsed'] = pd.to_datetime(uf['기록일자'], errors='coerce')
@@ -1292,142 +1212,142 @@ elif menu == "📋 일일 통합 점검":
             c_s1, c_s2, c_s3 = st.columns(3)
             with c_s1:
                 st.markdown("#### # 1"); st.markdown("---")
-                a1_1 = st.text_input("1단 토출온도 (200℃ 이하)", value="정상", disabled=not allow, key="a1_1")
-                a2_1 = st.text_input("2단 토출온도 (200℃ 이하)", value="정상", disabled=not allow, key="a2_1")
-                a3_1 = st.text_input("오일급유온도 (65℃ 이하)", value="정상", disabled=not allow, key="a3_1")
-                a4_1 = st.text_input("Running 누적시간", value="-", disabled=not allow, key="a4_1")
-                a5_1 = st.text_input("Loading 누적시간", value="-", disabled=not allow, key="a5_1")
-                a6_1 = st.text_input("1단 토출압력 (2.0~2.5)", value="정상", disabled=not allow, key="a6_1")
-                a7_1 = st.text_input("2단 토출압력 (7.2~8.5)", value="정상", disabled=not allow, key="a7_1")
-                a8_1 = st.text_input("오일급유압력 (2.0 이상)", value="정상", disabled=not allow, key="a8_1")
-                a9_1 = st.text_input("2단 흡입온도 (65℃ 이하)", value="정상", disabled=not allow, key="a9_1")
-                a10_1 = st.text_input("오일급유유면 (중~상)", value="정상", disabled=not allow, key="a10_1")
-                a11_1 = st.text_input("냉각수 입구압력 (3.5 이상)", value="정상", disabled=not allow, key="a11_1")
-                a12_1 = st.text_input("냉각수 입구온도 (32℃이하)", value="정상", disabled=not allow, key="a12_1")
-                a13_1 = st.text_input("냉각수 출구온도 (37℃이하)", value="정상", disabled=not allow, key="a13_1")
+                a1_1 = st.text_input("1단 토출온도 (200℃ 이하)", value="", disabled=not allow, key="a1_1")
+                a2_1 = st.text_input("2단 토출온도 (200℃ 이하)", value="", disabled=not allow, key="a2_1")
+                a3_1 = st.text_input("오일급유온도 (65℃ 이하)", value="", disabled=not allow, key="a3_1")
+                a4_1 = st.text_input("Running 누적시간", value="", disabled=not allow, key="a4_1")
+                a5_1 = st.text_input("Loading 누적시간", value="", disabled=not allow, key="a5_1")
+                a6_1 = st.text_input("1단 토출압력 (2.0~2.5)", value="", disabled=not allow, key="a6_1")
+                a7_1 = st.text_input("2단 토출압력 (7.2~8.5)", value="", disabled=not allow, key="a7_1")
+                a8_1 = st.text_input("오일급유압력 (2.0 이상)", value="", disabled=not allow, key="a8_1")
+                a9_1 = st.text_input("2단 흡입온도 (65℃ 이하)", value="", disabled=not allow, key="a9_1")
+                a10_1 = st.text_input("오일급유유면 (중~상)", value="", disabled=not allow, key="a10_1")
+                a11_1 = st.text_input("냉각수 입구압력 (3.5 이상)", value="", disabled=not allow, key="a11_1")
+                a12_1 = st.text_input("냉각수 입구온도 (32℃이하)", value="", disabled=not allow, key="a12_1")
+                a13_1 = st.text_input("냉각수 출구온도 (37℃이하)", value="", disabled=not allow, key="a13_1")
                 st.markdown("##### ■ AIR DRYER (#1)")
-                ad_l_1 = st.text_input("저압냉매 (3.5~6.0)", value="정상", disabled=not allow, key="adl_1")
-                ad_h_1 = st.text_input("고압냉매 (10~18)", value="정상", disabled=not allow, key="adh_1")
-                ad_a_1 = st.text_input("AIR배관 온도차", value="느껴짐", disabled=not allow, key="ada_1")
-                ad_d_1 = st.text_input("응축수 드레인", value="원활함", disabled=not allow, key="add_1")
+                ad_l_1 = st.text_input("저압냉매 (3.5~6.0)", value="", disabled=not allow, key="adl_1")
+                ad_h_1 = st.text_input("고압냉매 (10~18)", value="", disabled=not allow, key="adh_1")
+                ad_a_1 = st.text_input("AIR배관 온도차", value="", disabled=not allow, key="ada_1")
+                ad_d_1 = st.text_input("응축수 드레인", value="", disabled=not allow, key="add_1")
             with c_s2:
                 st.markdown("#### # 2"); st.markdown("---")
-                a1_2 = st.text_input("1단 토출온도 (200℃ 이하)", value="정상", key="a1_2", disabled=not allow)
-                a2_2 = st.text_input("2단 토출온도 (200℃ 이하)", value="정상", key="a2_2", disabled=not allow)
-                a3_2 = st.text_input("오일급유온도 (65℃ 이하)", value="정상", key="a3_2", disabled=not allow)
-                a4_2 = st.text_input("Running 누적시간", value="-", key="a4_2", disabled=not allow)
-                a5_2 = st.text_input("Loading 누적시간", value="-", key="a5_2", disabled=not allow)
-                a6_2 = st.text_input("1단 토출압력 (2.0~2.5)", value="정상", key="a6_2", disabled=not allow)
-                a7_2 = st.text_input("2단 토출압력 (7.2~8.5)", value="정상", key="a7_2", disabled=not allow)
-                a8_2 = st.text_input("오일급유압력 (2.0 이상)", value="정상", key="a8_2", disabled=not allow)
-                a9_2 = st.text_input("2단 흡입온도 (65℃ 이하)", value="정상", key="a9_2", disabled=not allow)
-                a10_2 = st.text_input("오일급유유면 (중~상)", value="정상", key="a10_2", disabled=not allow)
-                a11_2 = st.text_input("냉각수 입구압력 (3.5 이상)", value="정상", key="a11_2", disabled=not allow)
-                a12_2 = st.text_input("냉각수 입구온도 (32℃이하)", value="정상", key="a12_2", disabled=not allow)
-                a13_2 = st.text_input("냉각수 출구온도 (37℃이하)", value="정상", key="a13_2", disabled=not allow)
+                a1_2 = st.text_input("1단 토출온도 (200℃ 이하)", value="", key="a1_2", disabled=not allow)
+                a2_2 = st.text_input("2단 토출온도 (200℃ 이하)", value="", key="a2_2", disabled=not allow)
+                a3_2 = st.text_input("오일급유온도 (65℃ 이하)", value="", key="a3_2", disabled=not allow)
+                a4_2 = st.text_input("Running 누적시간", value="", key="a4_2", disabled=not allow)
+                a5_2 = st.text_input("Loading 누적시간", value="", key="a5_2", disabled=not allow)
+                a6_2 = st.text_input("1단 토출압력 (2.0~2.5)", value="", key="a6_2", disabled=not allow)
+                a7_2 = st.text_input("2단 토출압력 (7.2~8.5)", value="", key="a7_2", disabled=not allow)
+                a8_2 = st.text_input("오일급유압력 (2.0 이상)", value="", key="a8_2", disabled=not allow)
+                a9_2 = st.text_input("2단 흡입온도 (65℃ 이하)", value="", key="a9_2", disabled=not allow)
+                a10_2 = st.text_input("오일급유유면 (중~상)", value="", key="a10_2", disabled=not allow)
+                a11_2 = st.text_input("냉각수 입구압력 (3.5 이상)", value="", key="a11_2", disabled=not allow)
+                a12_2 = st.text_input("냉각수 입구온도 (32℃이하)", value="", key="a12_2", disabled=not allow)
+                a13_2 = st.text_input("냉각수 출구온도 (37℃이하)", value="", key="a13_2", disabled=not allow)
                 st.markdown("##### ■ AIR DRYER (#2)")
-                ad_l_2 = st.text_input("저압냉매 (3.5~6.0)", value="정상", key="adl_2", disabled=not allow)
-                ad_h_2 = st.text_input("고압냉매 (10~18)", value="정상", key="adh_2", disabled=not allow)
-                ad_a_2 = st.text_input("AIR배관 온도차", value="느껴짐", key="ada_2", disabled=not allow)
-                ad_d_2 = st.text_input("응축수 드레인", value="원활함", key="add_2", disabled=not allow)
+                ad_l_2 = st.text_input("저압냉매 (3.5~6.0)", value="", key="adl_2", disabled=not allow)
+                ad_h_2 = st.text_input("고압냉매 (10~18)", value="", key="adh_2", disabled=not allow)
+                ad_a_2 = st.text_input("AIR배관 온도차", value="", key="ada_2", disabled=not allow)
+                ad_d_2 = st.text_input("응축수 드레인", value="", key="add_2", disabled=not allow)
             with c_s3:
                 st.markdown("#### # 6"); st.markdown("---")
-                a1_3 = st.text_input("1단 토출온도 (200℃ 이하)", value="정상", key="a1_3", disabled=not allow)
-                a2_3 = st.text_input("2단 토출온도 (200℃ 이하)", value="정상", key="a2_3", disabled=not allow)
-                a3_3 = st.text_input("오일급유온도 (65℃ 이하)", value="정상", key="a3_3", disabled=not allow)
-                a4_3 = st.text_input("Running 누적시간", value="-", key="a4_3", disabled=not allow)
-                a5_3 = st.text_input("Loading 누적시간", value="-", key="a5_3", disabled=not allow)
-                a6_3 = st.text_input("1단 토출압력 (2.0~2.5)", value="정상", key="a6_3", disabled=not allow)
-                a7_3 = st.text_input("2단 토출압력 (7.2~8.5)", value="정상", key="a7_3", disabled=not allow)
-                a8_3 = st.text_input("오일급유압력 (2.0 이상)", value="정상", key="a8_3", disabled=not allow)
-                a9_3 = st.text_input("2단 흡입온도 (65℃ 이하)", value="정상", key="a9_3", disabled=not allow)
-                a10_3 = st.text_input("오일급유유면 (중~상)", value="정상", key="a10_3", disabled=not allow)
-                a11_3 = st.text_input("냉각수 입구압력 (3.5 이상)", value="정상", key="a11_3", disabled=not allow)
-                a12_3 = st.text_input("냉각수 입구온도 (32℃이하)", value="정상", key="a12_3", disabled=not allow)
-                a13_3 = st.text_input("냉각수 출구온도 (37℃이하)", value="정상", key="a13_3", disabled=not allow)
+                a1_3 = st.text_input("1단 토출온도 (200℃ 이하)", value="", key="a1_3", disabled=not allow)
+                a2_3 = st.text_input("2단 토출온도 (200℃ 이하)", value="", key="a2_3", disabled=not allow)
+                a3_3 = st.text_input("오일급유온도 (65℃ 이하)", value="", key="a3_3", disabled=not allow)
+                a4_3 = st.text_input("Running 누적시간", value="", key="a4_3", disabled=not allow)
+                a5_3 = st.text_input("Loading 누적시간", value="", key="a5_3", disabled=not allow)
+                a6_3 = st.text_input("1단 토출압력 (2.0~2.5)", value="", key="a6_3", disabled=not allow)
+                a7_3 = st.text_input("2단 토출압력 (7.2~8.5)", value="", key="a7_3", disabled=not allow)
+                a8_3 = st.text_input("오일급유압력 (2.0 이상)", value="", key="a8_3", disabled=not allow)
+                a9_3 = st.text_input("2단 흡입온도 (65℃ 이하)", value="", key="a9_3", disabled=not allow)
+                a10_3 = st.text_input("오일급유유면 (중~상)", value="", key="a10_3", disabled=not allow)
+                a11_3 = st.text_input("냉각수 입구압력 (3.5 이상)", value="", key="a11_3", disabled=not allow)
+                a12_3 = st.text_input("냉각수 입구온도 (32℃이하)", value="", key="a12_3", disabled=not allow)
+                a13_3 = st.text_input("냉각수 출구온도 (37℃이하)", value="", key="a13_3", disabled=not allow)
                 st.markdown("##### ■ AIR DRYER (#6)")
-                ad_l_3 = st.text_input("저압냉매 (3.5~6.0)", value="정상", key="adl_3", disabled=not allow)
-                ad_h_3 = st.text_input("고압냉매 (10~18)", value="정상", key="adh_3", disabled=not allow)
-                ad_a_3 = st.text_input("AIR배관 온도차", value="느껴짐", key="ada_3", disabled=not allow)
-                ad_d_3 = st.text_input("응축수 드레인", value="원활함", key="add_3", disabled=not allow)
+                ad_l_3 = st.text_input("저압냉매 (3.5~6.0)", value="", key="adl_3", disabled=not allow)
+                ad_h_3 = st.text_input("고압냉매 (10~18)", value="", key="adh_3", disabled=not allow)
+                ad_a_3 = st.text_input("AIR배관 온도차", value="", key="ada_3", disabled=not allow)
+                ad_d_3 = st.text_input("응축수 드레인", value="", key="add_3", disabled=not allow)
 
             st.markdown("---")
             t_c1, t_c2 = st.columns(2)
             with t_c1:
                 st.markdown("##### ■ TX-280 TURBO COMP.")
-                tx_out_p = st.text_input("토출압력 (0.637~0.735)", value="정상", disabled=not allow, key="tx_out_p")
-                tx_oil_p = st.text_input("윤활유압력 (0.140~0.160)", value="정상", disabled=not allow, key="tx_oil_p")
-                tx_suc_t = st.text_input("2단 흡입온도 (40℃ 이하)", value="정상", disabled=not allow, key="tx_suc_t")
-                tx_oil_t = st.text_input("윤활유온도 (35~50℃)", value="정상", disabled=not allow, key="tx_oil_t")
-                tx_run_t = st.text_input("Running 누적시간", value="-", disabled=not allow, key="tx_run_t")
-                tx_load_t = st.text_input("Loading 누적시간", value="-", disabled=not allow, key="tx_load_t")
-                tx_vib = st.text_input("축진동 (10um이하)", value="정상", disabled=not allow, key="tx_vib")
-                tx_gap = st.text_input("GAP전압 (-2.5~+2.5V)", value="정상", disabled=not allow, key="tx_gap")
-                tx_cin_t = st.text_input("냉각수 입구온도 (32℃이하)", value="정상", disabled=not allow, key="tx_cin_t")
-                tx_cout_t = st.text_input("냉각수 출구온도 (37℃이하)", value="정상", disabled=not allow, key="tx_cout_t")
-                tx_head_p = st.text_input("해더압력 (0.65 이상)", value="정상", disabled=not allow, key="tx_head_p")
+                tx_out_p = st.text_input("토출압력 (0.637~0.735)", value="", disabled=not allow, key="tx_out_p")
+                tx_oil_p = st.text_input("윤활유압력 (0.140~0.160)", value="", disabled=not allow, key="tx_oil_p")
+                tx_suc_t = st.text_input("2단 흡입온도 (40℃ 이하)", value="", disabled=not allow, key="tx_suc_t")
+                tx_oil_t = st.text_input("윤활유온도 (35~50℃)", value="", disabled=not allow, key="tx_oil_t")
+                tx_run_t = st.text_input("Running 누적시간", value="", disabled=not allow, key="tx_run_t")
+                tx_load_t = st.text_input("Loading 누적시간", value="", disabled=not allow, key="tx_load_t")
+                tx_vib = st.text_input("축진동 (10um이하)", value="", disabled=not allow, key="tx_vib")
+                tx_gap = st.text_input("GAP전압 (-2.5~+2.5V)", value="", disabled=not allow, key="tx_gap")
+                tx_cin_t = st.text_input("냉각수 입구온도 (32℃이하)", value="", disabled=not allow, key="tx_cin_t")
+                tx_cout_t = st.text_input("냉각수 출구온도 (37℃이하)", value="", disabled=not allow, key="tx_cout_t")
+                tx_head_p = st.text_input("해더압력 (0.65 이상)", value="", disabled=not allow, key="tx_head_p")
             with t_c2:
                 st.markdown("##### ■ AIR DRYER (TX)")
-                tx_dryer_low = st.text_input("저압냉매 (TX)", value="정상", disabled=not allow, key="tx_dryer_low")
-                tx_dryer_high = st.text_input("고압냉매 (TX)", value="정상", disabled=not allow, key="tx_dryer_high")
-                tx_dryer_air = st.text_input("AIR배관 온도차 (TX)", value="느껴짐", disabled=not allow, key="tx_dryer_air")
-                tx_dryer_drain = st.text_input("응축수 드레인 (TX)", value="원활함", disabled=not allow, key="tx_dryer_drain")
+                tx_dryer_low = st.text_input("저압냉매 (TX)", value="", disabled=not allow, key="tx_dryer_low")
+                tx_dryer_high = st.text_input("고압냉매 (TX)", value="", disabled=not allow, key="tx_dryer_high")
+                tx_dryer_air = st.text_input("AIR배관 온도차 (TX)", value="", disabled=not allow, key="tx_dryer_air")
+                tx_dryer_drain = st.text_input("응축수 드레인 (TX)", value="", disabled=not allow, key="tx_dryer_drain")
 
             st.markdown("---")
             p_col1, p_col2 = st.columns(2)
             with p_col1:
                 st.markdown("##### ■ 공압설비")
-                pneu_leak = st.text_input("누유/누수 여부", value="없음", disabled=not allow, key="pneu_leak")
-                pneu_trap = st.text_input("Drain Trap 정상작동", value="정상", disabled=not allow, key="pneu_trap")
-                pneu_mois = st.text_input("압축공기 내 수분", value="없음", disabled=not allow, key="pneu_mois")
-                pneu_vib = st.text_input("진동이나 이상소음", value="없음", disabled=not allow, key="pneu_vib")
-                pneu_curr = st.text_input("운전전류 정상", value="정상", disabled=not allow, key="pneu_curr")
+                pneu_leak = st.text_input("누유/누수 여부", value="", disabled=not allow, key="pneu_leak")
+                pneu_trap = st.text_input("Drain Trap 정상작동", value="", disabled=not allow, key="pneu_trap")
+                pneu_mois = st.text_input("압축공기 내 수분", value="", disabled=not allow, key="pneu_mois")
+                pneu_vib = st.text_input("진동이나 이상소음", value="", disabled=not allow, key="pneu_vib")
+                pneu_curr = st.text_input("운전전류 정상", value="", disabled=not allow, key="pneu_curr")
             with p_col2:
                 st.markdown("##### ■ 냉각탑")
-                tower_fan = st.text_input("냉각탑 Fan 정상작동", value="정상", disabled=not allow, key="tower_fan")
-                tower_mach = st.text_input("산기관 정상작동", value="정상", disabled=not allow, key="tower_mach")
-                tower_ext = st.text_input("외관상태 양호", value="양호", disabled=not allow, key="tower_ext")
-                tower_vib = st.text_input("진동소음 여부", value="없음", disabled=not allow, key="tower_vib")
-                tower_fill = st.text_input("충진물 이물질", value="없음", disabled=not allow, key="tower_fill")
+                tower_fan = st.text_input("냉각탑 Fan 정상작동", value="", disabled=not allow, key="tower_fan")
+                tower_mach = st.text_input("산기관 정상작동", value="", disabled=not allow, key="tower_mach")
+                tower_ext = st.text_input("외관상태 양호", value="", disabled=not allow, key="tower_ext")
+                tower_vib = st.text_input("진동소음 여부", value="", disabled=not allow, key="tower_vib")
+                tower_fill = st.text_input("충진물 이물질", value="", disabled=not allow, key="tower_fill")
 
             st.markdown("---")
             w_col1, w_col2 = st.columns(2)
             with w_col1:
                 st.markdown("##### ■ 급수설비")
-                w_u_lvl = st.text_input("지하수조 수위 (55%이상)", value="정상", disabled=not allow, key="w_u_lvl")
-                w_i_lvl = st.text_input("공업용수 수위 (35%이상)", value="정상", disabled=not allow, key="w_i_lvl")
-                w_p_lvl = st.text_input("정수조 수위 (40%이상)", value="정상", disabled=not allow, key="w_p_lvl")
-                w_u_stat = st.text_input("지하수조 외관 양호", value="양호", disabled=not allow, key="w_u_stat")
-                w_h_stat = st.text_input("고가수조 외관 양호", value="양호", disabled=not allow, key="w_h_stat")
-                w_m_stat = st.text_input("계량기 파손/누수", value="없음", disabled=not allow, key="w_m_stat")
+                w_u_lvl = st.text_input("지하수조 수위 (55%이상)", value="", disabled=not allow, key="w_u_lvl")
+                w_i_lvl = st.text_input("공업용수 수위 (35%이상)", value="", disabled=not allow, key="w_i_lvl")
+                w_p_lvl = st.text_input("정수조 수위 (40%이상)", value="", disabled=not allow, key="w_p_lvl")
+                w_u_stat = st.text_input("지하수조 외관 양호", value="", disabled=not allow, key="w_u_stat")
+                w_h_stat = st.text_input("고가수조 외관 양호", value="", disabled=not allow, key="w_h_stat")
+                w_m_stat = st.text_input("계량기 파손/누수", value="", disabled=not allow, key="w_m_stat")
             with w_col2:
                 st.markdown("##### ■ 수조 및 온도")
-                oil_sep = st.text_input("유수분리조 누유", value="없음", disabled=not allow, key="oil_sep")
-                cool_cap = st.text_input("냉각수조 용량 정상", value="정상", disabled=not allow, key="cool_cap")
-                cool_t = st.text_input("냉각수 온도 (37℃이하)", value="정상", disabled=not allow, key="cool_t")
-                hot_p = st.text_input("온수Tank 압력 (5.0이하)", value="정상", disabled=not allow, key="hot_p")
-                hot_t = st.text_input("온수Tank 온도 (40℃이상)", value="정상", disabled=not allow, key="hot_t")
-                hot_stat = st.text_input("온수Tank 누수여부", value="없음", disabled=not allow, key="hot_stat")
-                temp_mach = st.text_input("기계실 실내온도 (℃)", value="25", disabled=not allow, key="temp_mach")
-                temp_outside = st.text_input("외부 현재온도 (℃)", value="25", disabled=not allow, key="temp_outside")
+                oil_sep = st.text_input("유수분리조 누유", value="", disabled=not allow, key="oil_sep")
+                cool_cap = st.text_input("냉각수조 용량 정상", value="", disabled=not allow, key="cool_cap")
+                cool_t = st.text_input("냉각수 온도 (37℃이하)", value="", disabled=not allow, key="cool_t")
+                hot_p = st.text_input("온수Tank 압력 (5.0이하)", value="", disabled=not allow, key="hot_p")
+                hot_t = st.text_input("온수Tank 온도 (40℃이상)", value="", disabled=not allow, key="hot_t")
+                hot_stat = st.text_input("온수Tank 누수여부", value="", disabled=not allow, key="hot_stat")
+                temp_mach = st.text_input("기계실 실내온도 (℃)", value="", disabled=not allow, key="temp_mach")
+                temp_outside = st.text_input("외부 현재온도 (℃)", value="", disabled=not allow, key="temp_outside")
 
             st.markdown("---")
             pmp_c1, pmp_c2, pmp_c3 = st.columns(3)
             with pmp_c1:
                 st.markdown("##### ■ COMP 냉각수 PUMP")
-                p_comp_p = st.text_input("압력 (3.5 이상)", value="정상", key="pc_p", disabled=not allow)
-                p_comp_n = st.text_input("소음진동 여부", value="없음", key="pc_n", disabled=not allow)
-                p_comp_s = st.text_input("외관상태 양호", value="양호", key="pc_s", disabled=not allow)
+                p_comp_p = st.text_input("압력 (3.5 이상)", value="", key="pc_p", disabled=not allow)
+                p_comp_n = st.text_input("소음진동 여부", value="", key="pc_n", disabled=not allow)
+                p_comp_s = st.text_input("외관상태 양호", value="", key="pc_s", disabled=not allow)
             with pmp_c2:
                 st.markdown("##### ■ 공장동 냉난방 PUMP")
-                p_fac_p = st.text_input("압력 (3.5 이상)", value="정상", key="pf_p", disabled=not allow)
-                p_fac_n = st.text_input("소음진동 여부", value="없음", key="pf_n", disabled=not allow)
-                p_fac_s = st.text_input("외관상태 양호", value="양호", key="pf_s", disabled=not allow)
+                p_fac_p = st.text_input("압력 (3.5 이상)", value="", key="pf_p", disabled=not allow)
+                p_fac_n = st.text_input("소음진동 여부", value="", key="pf_n", disabled=not allow)
+                p_fac_s = st.text_input("외관상태 양호", value="", key="pf_s", disabled=not allow)
             with pmp_c3:
                 st.markdown("##### ■ 사무동 냉난방 PUMP")
-                p_off_p = st.text_input("압력 (3.5 이상)", value="정상", key="po_p", disabled=not allow)
-                p_off_n = st.text_input("소음진동 여부", value="없음", key="po_n", disabled=not allow)
-                p_off_s = st.text_input("외관상태 양호", value="양호", key="po_s", disabled=not allow)
+                p_off_p = st.text_input("압력 (3.5 이상)", value="", key="po_p", disabled=not allow)
+                p_off_n = st.text_input("소음진동 여부", value="", key="po_n", disabled=not allow)
+                p_off_s = st.text_input("외관상태 양호", value="", key="po_s", disabled=not allow)
 
             etc_notes = st.text_area("비고 및 특이사항", height=80, key="etc_notes_txt", disabled=not allow)
             if st.form_submit_button("💾 일일 점검표 저장", use_container_width=True, disabled=not allow):
@@ -1469,7 +1389,6 @@ elif menu == "📋 일일 통합 점검":
                         'p_off_p': p_off_p, 'p_off_n': p_off_n, 'p_off_s': p_off_s,
                         'etc_notes': etc_notes.strip()
                     })
-                    st.success("✅ 저장 완료!")
                     st.rerun()
 
     with t2:
@@ -1555,15 +1474,15 @@ elif menu == "📋 일일 통합 점검":
 
 elif menu == "🧯 소화기 점검 관리":
     is_qr_scanned = bool(ext_id_param)
-    current_ext = ext_id_param if is_qr_scanned else "ETC-1"
     ext_all = get_all_extinguishers()
+    current_ext = ext_id_param if is_qr_scanned else (ext_all['소화기ID'].iloc[0] if not ext_all.empty else "")
     current_loc = ext_all[ext_all['소화기ID']==current_ext]['설치위치'].values[0] if not ext_all.empty and current_ext in ext_all['소화기ID'].values else ""
 
     st.markdown("<div class='system-banner'><h3>🧯 소화 설비 현장 점검 모듈</h3><p>기기를 점검하고 결함을 추적·조치합니다.</p></div>", unsafe_allow_html=True)
     t1, t2 = st.tabs(["📋 점검표 작성", "📈 현황 및 조치"])
     
     with t1:
-        rec = get_recent_inspection_this_month(current_ext)
+        rec = get_recent_inspection_this_month(current_ext) if current_ext else None
         allow = True
         
         if rec:
@@ -1575,7 +1494,7 @@ elif menu == "🧯 소화기 점검 관리":
         with st.form("ext_form"):
             c1, c2 = st.columns(2)
             with c1:
-                t_ext = st.text_input("ID", value=current_ext, disabled=True) if is_qr_scanned else st.selectbox("소화기 선택", ext_all['소화기ID'].tolist())
+                t_ext = st.text_input("ID", value=current_ext, disabled=True) if is_qr_scanned else st.selectbox("소화기 선택", ext_all['소화기ID'].tolist() if not ext_all.empty else [""])
                 ins = st.text_input("점검자 성명", disabled=not allow)
             with c2:
                 stat = st.selectbox("외관/압력", ["정상", "압력 부족", "파손/불량", "위치 이탈/미비치"], disabled=not allow)
@@ -1583,6 +1502,8 @@ elif menu == "🧯 소화기 점검 관리":
             if st.form_submit_button("✅ 제출", use_container_width=True, disabled=not allow):
                 if not ins.strip(): 
                     st.error("성명 입력")
+                elif not (current_ext if is_qr_scanned else t_ext):
+                    st.error("선택된 소화기가 없습니다.")
                 else:
                     save_inspection(current_ext if is_qr_scanned else t_ext, ins.strip(), stat, nts.strip())
                     st.rerun()
@@ -1622,7 +1543,7 @@ elif menu == "⚡ 유틸리티 사용량 관리":
             rd = st.date_input("검침 일자", value=datetime.now())
             u_t = st.selectbox("구분", UTILITY_ORDER, index=UTILITY_ORDER.index(cur_u) if cur_u in UTILITY_ORDER else 0, disabled=is_u_qr)
         with c2:
-            con = st.number_input("지침값", min_value=0.0, step=1.0, disabled=not allow)
+            con = st.number_input("지침값", min_value=0.0, step=1.0, value=0.0, disabled=not allow)
             rn = st.text_input("성명", disabled=not allow)
         nts = st.text_area("특이사항", height=75, disabled=not allow)
         if st.form_submit_button("💾 등록", use_container_width=True, disabled=not allow):
