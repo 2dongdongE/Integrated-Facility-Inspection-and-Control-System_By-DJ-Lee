@@ -10,26 +10,49 @@ import hashlib
 import os
 import json
 import gspread
-from oauth2client.service_account import ServiceAccountCredentials
+from google.oauth2.service_account import Credentials
 
 # ----------------------------------------------------
-# 0. 구글 시트(Google Sheets) 연결 및 백업 설정
+# 0. 구글 시트(Google Sheets) 연결 및 백업 설정 (st.secrets 적용)
 # ----------------------------------------------------
 @st.cache_resource
 def init_google_sheet():
-    scope = [
-        "https://spreadsheets.google.com/feeds",
-        "https://www.googleapis.com/auth/drive"
-    ]
-    creds = ServiceAccountCredentials.from_json_keyfile_name("credentials.json", scope)
-    client = gspread.authorize(creds)
-    # 구글 시트 파일 이름을 필요에 맞게 수정하세요 (예: Facility_Inspection_Logs)
-    sheet = client.open("Facility_Inspection_Logs").sheet1
-    return sheet
-
-def backup_to_gspreadsheet(row_values):
     try:
-        sheet = init_google_sheet()
+        scope = [
+            "https://www.googleapis.com/auth/spreadsheets",
+            "https://www.googleapis.com/auth/drive"
+        ]
+        # Streamlit Secrets 또는 local credentials.json 분기 처리
+        if "gcp_service_account" in st.secrets:
+            creds_dict = dict(st.secrets["gcp_service_account"])
+            creds = Credentials.from_service_account_info(creds_dict, scopes=scope)
+        elif os.path.exists("credentials.json"):
+            creds = Credentials.from_service_account_file("credentials.json", scopes=scope)
+        else:
+            return None
+        
+        client = gspread.authorize(creds)
+        # 구글 시트 파일 이름 (구글 드라이브의 스프레드시트 이름)
+        return client.open("Facility_Inspection_Logs")
+    except Exception as e:
+        print(f"구글 시트 인증 실패: {e}")
+        return None
+
+def backup_to_gspreadsheet(row_values, worksheet_name=None):
+    try:
+        doc = init_google_sheet()
+        if not doc:
+            return False
+        
+        # 워크시트(탭) 지정, 없으면 첫 번째 탭 사용
+        if worksheet_name:
+            try:
+                sheet = doc.worksheet(worksheet_name)
+            except Exception:
+                sheet = doc.sheet1
+        else:
+            sheet = doc.sheet1
+            
         sheet.append_row(row_values)
         return True
     except Exception as e:
