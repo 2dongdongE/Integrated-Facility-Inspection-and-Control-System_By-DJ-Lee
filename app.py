@@ -71,6 +71,16 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# --- 새로고침 후에도 구글 시트 결과 메시지 띄우기 ---
+if "sheet_alert" in st.session_state:
+    alert_type, alert_msg = st.session_state.pop("sheet_alert")
+    if alert_type == "error":
+        st.error(alert_msg)
+    elif alert_type == "warning":
+        st.warning(alert_msg)
+    elif alert_type == "success":
+        st.success(alert_msg)
+
 # ----------------------------------------------------
 # 2. 전역 설정 및 경로 정의
 # ----------------------------------------------------
@@ -92,7 +102,7 @@ def get_utility_unit(u_type):
     else:
         return "Ton"
 
-# --- 구글 스프레드시트 실시간 연동 (실패 원인 화면 출력) ---
+# --- 구글 시트 연동 핵심 함수 ---
 def get_gspread_client():
     try:
         import gspread
@@ -114,23 +124,23 @@ def get_gspread_client():
         if os.path.exists(local_key):
             return gspread.service_account(filename=local_key)
     except Exception as e:
-        st.error(f"🚨 [구글 인증 키 파싱 오류]: {e}")
+        st.session_state["sheet_alert"] = ("error", f"🚨 [구글 키 인증 파싱 에러]: {e}")
     return None
 
 def append_to_sheet(sheet_name: str, row_values: list):
     try:
         gc = get_gspread_client()
         if not gc:
-            st.warning("⚠️ 구글 인증 정보를 찾을 수 없습니다. (Streamlit Cloud의 Settings -> Secrets에 키가 등록되어 있는지 확인해주세요.)")
+            st.session_state["sheet_alert"] = ("warning", "⚠️ 구글 연동 키가 없습니다. Streamlit Cloud의 Settings -> Secrets에 키(gcp_json)가 등록되어 있는지 확인하세요.")
             return
             
         sh = gc.open("facility data")
         ws = sh.worksheet(sheet_name)
         clean_values = [str(v) if not isinstance(v, (int, float)) else v for v in row_values]
         ws.append_row(clean_values, value_input_option='USER_ENTERED')
-        st.toast(f" 구글 시트({sheet_name})에 성공적으로 저장되었습니다!")
+        st.session_state["sheet_alert"] = ("success", f" 구글 시트('{sheet_name}')에 정상적으로 자동 저장되었습니다!")
     except Exception as e:
-        st.error(f"🚨 [구글 시트 저장 실패]: {e}")
+        st.session_state["sheet_alert"] = ("error", f"🚨 [구글 시트 저장 실패 상세 원인]: {e}")
 
 # ----------------------------------------------------
 # 3. 통합 데이터베이스 초기화 및 조작 함수
@@ -1291,7 +1301,6 @@ elif menu == "📋 일일 통합 점검":
                         'p_off_p': p_off_p, 'p_off_n': p_off_n, 'p_off_s': p_off_s,
                         'etc_notes': etc_notes.strip()
                     })
-                    st.success("✅ 저장 완료!")
                     st.rerun()
 
     with t2:
@@ -1407,7 +1416,6 @@ elif menu == "🧯 소화기 점검 관리":
                     st.error("성명 입력")
                 else:
                     save_inspection(current_ext if is_qr_scanned else t_ext, ins.strip(), stat, nts.strip())
-                    st.success("등록 완료")
                     st.rerun()
 
     with t2:
@@ -1453,7 +1461,6 @@ elif menu == "⚡ 유틸리티 사용량 관리":
                 st.error("성명 입력")
             else:
                 save_utility_usage(str(rd), cur_u if is_u_qr else u_t, con, rn.strip(), nts)
-                st.success("등록 완료")
                 st.rerun()
     st.markdown("---")
     st.subheader("📂 이력 조회")
@@ -1559,7 +1566,6 @@ elif menu == "🧱 밀폐공간 점검":
                         "19": q33, "20": q34, "21": q35, "22": q36
                     }
                     save_confined_space_log(cs_date, cs_ins, q_data, cs_notes)
-                    st.success("✅ 밀폐공간 점검표가 저장되었습니다!")
                     st.rerun()
 
     with tab_cs2:
@@ -1728,7 +1734,6 @@ elif menu == "🧯 소방 펌프 및 밸브 점검":
                     st.error("점검자 성명을 입력해주세요.")
                 else:
                     save_fire_pump_log(fp_date, pump_category, fp_ins, q_data, fp_notes)
-                    st.success(f"✅ {pump_category} 점검표가 저장되었습니다!")
                     st.rerun()
 
     with tab_fp2:
