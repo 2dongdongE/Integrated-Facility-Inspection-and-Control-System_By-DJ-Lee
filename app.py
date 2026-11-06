@@ -102,7 +102,7 @@ def get_utility_unit(u_type):
     else:
         return "Ton"
 
-# --- 구글 시트 연동 핵심 함수 (저장, 수정, 삭제) ---
+# --- 구글 시트 연동 핵심 함수 (저장, 수정, 삭제, 전체 복원) ---
 def get_gspread_client():
     try:
         import gspread
@@ -169,7 +169,7 @@ def update_cell_by_id(sheet_name: str, target_id, col_idx: int, new_value):
                 ws.update_cell(idx + 1, col_idx, new_value)
                 break
     except Exception as e:
-        st.session_state["sheet_alert"] = ("error", f"🚨 [구글 시트 셀 업데이트 실패]: {e}")
+        st.session_state["sheet_alert"] = ("error", f"🚨 [구글 시트 업데이트 실패]: {e}")
 
 def clear_sheet_records(sheet_name: str):
     try:
@@ -183,6 +183,107 @@ def clear_sheet_records(sheet_name: str):
             ws.delete_rows(2, len(all_vals))
     except Exception as e:
         st.session_state["sheet_alert"] = ("error", f"🚨 [구글 시트 전체 삭제 실패]: {e}")
+
+# --- 구글 시트 ➔ 시스템 DB 원클릭 전체 복원 함수 ---
+def restore_data_from_sheets():
+    gc = get_gspread_client()
+    if not gc:
+        return False, "구글 연동 키(Secrets)를 찾을 수 없어 복원할 수 없습니다."
+    try:
+        sh = gc.open("facility data")
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+
+        # 1. 소화기 자산 (extinguishers)
+        try:
+            ws = sh.worksheet("extinguishers")
+            rows = ws.get_all_values()[1:]
+            for r in rows:
+                if len(r) >= 2 and r[0].strip():
+                    cursor.execute("INSERT OR REPLACE INTO extinguishers (ext_id, location) VALUES (?, ?)", (r[0].strip(), r[1].strip()))
+        except Exception: pass
+
+        # 2. 소화기 점검 이력 (inspection_history)
+        try:
+            ws = sh.worksheet("inspection_history")
+            rows = ws.get_all_values()[1:]
+            for r in rows:
+                if len(r) >= 7 and r[0].strip():
+                    cursor.execute("""INSERT OR REPLACE INTO inspection_history 
+                        (id, ext_id, inspector, status, notes, timestamp, resolved) 
+                        VALUES (?, ?, ?, ?, ?, ?, ?)""", 
+                        (int(r[0]), r[1], r[2], r[3], r[4], r[5], int(r[6]) if r[6].isdigit() else 0))
+        except Exception: pass
+
+        # 3. 유틸리티 검침 데이터 (utility_usage)
+        try:
+            ws = sh.worksheet("utility_usage")
+            rows = ws.get_all_values()[1:]
+            for r in rows:
+                if len(r) >= 6 and r[0].strip():
+                    cursor.execute("""INSERT OR REPLACE INTO utility_usage 
+                        (id, record_date, utility_type, consumption, recorder, notes) 
+                        VALUES (?, ?, ?, ?, ?, ?)""", 
+                        (int(r[0]), r[1], r[2], float(r[3]) if r[3] else 0.0, r[4], r[5]))
+        except Exception: pass
+
+        # 4. 일일 설비 점검 일지 (daily_exact_inspection)
+        try:
+            ws = sh.worksheet("daily_exact_inspection")
+            header = ws.row_values(1)
+            rows = ws.get_all_values()[1:]
+            if header and rows:
+                cols = header
+                placeholders = ", ".join(["?"] * len(cols))
+                col_names = ", ".join(cols)
+                for r in rows:
+                    if r and r[0].strip():
+                        vals = r + [''] * (len(cols) - len(r))
+                        vals[0] = int(vals[0]) if vals[0].isdigit() else vals[0]
+                        cursor.execute(f"INSERT OR REPLACE INTO daily_exact_inspection ({col_names}) VALUES ({placeholders})", vals[:len(cols)])
+        except Exception: pass
+
+        # 5. 밀폐공간 점검표 (confined_space_inspection)
+        try:
+            ws = sh.worksheet("confined_space_inspection")
+            rows = ws.get_all_values()[1:]
+            for r in rows:
+                if len(r) >= 6 and r[0].strip():
+                    cursor.execute("""INSERT OR REPLACE INTO confined_space_inspection 
+                        (id, record_date, inspector, q_data, notes, timestamp) 
+                        VALUES (?, ?, ?, ?, ?, ?)""", 
+                        (int(r[0]), r[1], r[2], r[3], r[4], r[5]))
+        except Exception: pass
+
+        # 6. 소방펌프 및 밸브 점검표 (fire_pump_inspection)
+        try:
+            ws = sh.worksheet("fire_pump_inspection")
+            rows = ws.get_all_values()[1:]
+            for r in rows:
+                if len(r) >= 7 and r[0].strip():
+                    cursor.execute("""INSERT OR REPLACE INTO fire_pump_inspection 
+                        (id, record_date, category, inspector, q_data, notes, timestamp) 
+                        VALUES (?, ?, ?, ?, ?, ?, ?)""", 
+                        (int(r[0]), r[1], r[2], r[3], r[4], r[5], r[6]))
+        except Exception: pass
+
+        # 7. 관리자 계정 명부 (admin_users)
+        try:
+            ws = sh.worksheet("admin_users")
+            rows = ws.get_all_values()[1:]
+            for r in rows:
+                if len(r) >= 8 and r[0].strip():
+                    cursor.execute("""INSERT OR REPLACE INTO admin_users 
+                        (id, username, password_hash, name, dept, role, approved, created_at) 
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)""", 
+                        (int(r[0]), r[1], r[2], r[3], r[4], r[5], int(r[6]) if r[6].isdigit() else 0, r[7]))
+        except Exception: pass
+
+        conn.commit()
+        conn.close()
+        return True, "구글 시트에 보관된 모든 점검 및 계정 데이터를 시스템으로 성공적으로 복원했습니다!"
+    except Exception as e:
+        return False, f"데이터 복원 실패: {e}"
 
 # ----------------------------------------------------
 # 3. 통합 데이터베이스 초기화 및 조작 함수
@@ -386,7 +487,6 @@ def approve_admin_request(user_id):
     conn.execute("UPDATE admin_users SET approved = 1 WHERE id = ?", (user_id,))
     conn.commit()
     conn.close()
-    # 구글 시트 approved 컬럼(7번째 열)을 1로 업데이트
     update_cell_by_id("admin_users", user_id, 7, 1)
 
 def reject_or_delete_user(user_id):
@@ -394,7 +494,6 @@ def reject_or_delete_user(user_id):
     conn.execute("DELETE FROM admin_users WHERE id = ? AND role != 'master'", (user_id,))
     conn.commit()
     conn.close()
-    # 구글 시트에서 해당 사용자 행 삭제
     delete_row_from_sheet("admin_users", user_id)
 
 def get_all_approved_users():
@@ -804,6 +903,18 @@ else:
 
     st.sidebar.markdown("---")
     st.sidebar.subheader("⚙️ 관리자 도구")
+
+    # [핵심 기능] 구글 시트 원클릭 전체 데이터 복원 기능
+    with st.sidebar.expander("🔄 구글 시트 데이터 복원", expanded=False):
+        st.caption("서버 초기화 시 구글 시트에 누적된 모든 데이터를 앱 내부로 1초 만에 복구합니다.")
+        if st.button("구글 시트 데이터 전체 복원 실행", use_container_width=True, key="btn_restore_all_from_sheets"):
+            with st.spinner("구글 시트에서 전체 데이터를 복원하는 중..."):
+                ok, msg = restore_data_from_sheets()
+                if ok:
+                    st.session_state["sheet_alert"] = ("success", f"✅ {msg}")
+                else:
+                    st.session_state["sheet_alert"] = ("error", f"🚨 {msg}")
+                st.rerun()
 
     if is_master:
         with st.sidebar.expander("🌐 도메인(URL) 설정", expanded=False):
