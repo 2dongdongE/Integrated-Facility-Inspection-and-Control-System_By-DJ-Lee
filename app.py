@@ -1,328 +1,359 @@
 import streamlit as st
-import pandas as pd
 import sqlite3
+import pandas as pd
 from datetime import datetime, date, timedelta
+import io
+import altair as alt
 import qrcode
-from io import BytesIO
-import json
+from PIL import Image, ImageDraw, ImageFont
+import hashlib
 import os
-import gspread
-from google.oauth2.service_account import Credentials
+import json
 
 # ----------------------------------------------------
-# 0. 구글 시트(Google Sheets) 연결 및 백업 설정 (st.secrets 적용)
+# 1. 페이지 레이아웃 및 스타일
 # ----------------------------------------------------
-@st.cache_resource
-def init_google_sheet():
+st.set_page_config(
+    page_title="전사 시설물 에너지 관리 현황",
+    page_icon="🏢",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+st.markdown("""
+<style>
+    [data-testid="InputInstructions"],
+    div[data-testid="InputInstructions"] span {
+        display: none !important;
+    }
+    .system-banner {
+        background-color: var(--secondary-background-color);
+        border: 1px solid var(--border-color, rgba(128, 128, 128, 0.2));
+        border-left: 6px solid #2563eb;
+        border-radius: 8px;
+        padding: 18px 24px;
+        margin-bottom: 20px;
+    }
+    .system-banner h3 {
+        margin: 0 0 6px 0;
+        font-size: 20px;
+        font-weight: 800;
+        color: var(--text-color);
+    }
+    .system-banner p {
+        margin: 0;
+        font-size: 13px;
+        opacity: 0.8;
+        color: var(--text-color);
+    }
+    .admin-badge {
+        background-color: rgba(239, 68, 68, 0.15);
+        border-left: 4px solid #ef4444;
+        padding: 10px 14px;
+        border-radius: 4px;
+        margin: 16px 0;
+    }
+    .inspector-badge {
+        background-color: rgba(34, 197, 94, 0.15);
+        border-left: 4px solid #22c55e;
+        padding: 10px 14px;
+        border-radius: 4px;
+        margin: 16px 0;
+    }
+    .completed-box {
+        background-color: rgba(34, 197, 94, 0.12);
+        border: 1px solid rgba(34, 197, 94, 0.4);
+        border-left: 6px solid #22c55e;
+        border-radius: 8px;
+        padding: 16px 20px;
+        margin-bottom: 18px;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+# ----------------------------------------------------
+# 2. 전역 설정 및 경로 정의
+# ----------------------------------------------------
+UTILITY_ORDER = ["상수도(메인)", "상수도(식당)", "지하수", "정수", "전기사용량", "LPG가스"]
+UTILITY_COLORS = ['#2563eb', '#60a5fa', '#f59e0b', '#10b981', '#ef4444', '#9467bd']
+WATER_UTILITIES = ["상수도(메인)", "상수도(식당)", "지하수", "정수"]
+DEFAULT_HOST_BASE_URL = "https://administrative-expertise-saying-geological.trycloudflare.com"
+
+db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "facility.db")
+
+def hash_pw(password: str) -> str:
+    return hashlib.sha256(password.strip().encode()).hexdigest()
+
+def get_utility_unit(u_type):
+    if "전기" in u_type:
+        return "kWh"
+    elif "LPG" in u_type:
+        return "㎥"
+    else:
+        return "Ton"
+
+# --- 구글 시트 실시간 자동 저장 함수 ---
+def get_gspread_client():
     try:
-        scope = [
-            "https://www.googleapis.com/auth/spreadsheets",
-            "https://www.googleapis.com/auth/drive"
-        ]
+        import gspread
+        if "gcp_json" in st.secrets:
+            return gspread.service_account_from_dict(json.loads(st.secrets["gcp_json"]))
         if "gcp_service_account" in st.secrets:
-            creds_dict = dict(st.secrets["gcp_service_account"])
-            creds = Credentials.from_service_account_info(creds_dict, scopes=scope)
-        elif os.path.exists("credentials.json"):
-            creds = Credentials.from_service_account_file("credentials.json", scopes=scope)
-        else:
-            return None
-        
-        client = gspread.authorize(creds)
-        return client.open("Facility_Inspection_Logs")
-    except Exception as e:
-        print(f"구글 시트 인증 실패: {e}")
-        return None
+            return gspread.service_account_from_dict(dict(st.secrets["gcp_service_account"]))
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        local_key = os.path.join(base_dir, "service_account.json")
+        if os.path.exists(local_key):
+            return gspread.service_account(filename=local_key)
+    except Exception:
+        pass
+    return None
 
-def backup_to_gspreadsheet(row_values, worksheet_name=None):
+def append_to_sheet(sheet_name: str, row_values: list):
     try:
-        doc = init_google_sheet()
-        if not doc:
-            return False
-        
-        if worksheet_name:
-            try:
-                sheet = doc.worksheet(worksheet_name)
-            except Exception:
-                sheet = doc.sheet1
-        else:
-            sheet = doc.sheet1
-            
-        sheet.append_row(row_values)
-        return True
-    except Exception as e:
-        print(f"구글 시트 백업 중 오류 발생: {e}")
-        return False
+        gc = get_gspread_client()
+        if gc:
+            sh = gc.open("facility data")
+            ws = sh.worksheet(sheet_name)
+            clean_values = [str(v) if not isinstance(v, (int, float)) else v for v in row_values]
+            ws.append_row(clean_values, value_input_option='USER_ENTERED')
+    except Exception:
+        pass
 
 # ----------------------------------------------------
-# 1. 데이터베이스 초기화 및 테이블 생성
+# 3. 통합 데이터베이스 초기화 및 조작 함수
 # ----------------------------------------------------
-db_path = "facility_management.db"
+def seed_test_utility_data(conn):
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM utility_usage")
+    today = date.today()
+    for i in range(365, -1, -1):
+        record_d = str(today - timedelta(days=i))
+        water_main = 1000 + (365 - i) * 20
+        if i == 0:
+            water_main += 30  
+            notes_main = '🚨 금일 이상 검침 (50톤 누수 급증)'
+        else:
+            notes_main = '평일 정기 검침 (일 20톤)'
+        cursor.execute("INSERT INTO utility_usage (record_date, utility_type, consumption, recorder, notes) VALUES (?, '상수도(메인)', ?, '관리자', ?)", (record_d, water_main, notes_main))
+        
+        water_rest = 200 + (365 - i) * 5
+        cursor.execute("INSERT INTO utility_usage (record_date, utility_type, consumption, recorder, notes) VALUES (?, '상수도(식당)', ?, '관리자', '정상 검침')", (record_d, water_rest))
+        
+        gw = 500 + (365 - i) * 10
+        cursor.execute("INSERT INTO utility_usage (record_date, utility_type, consumption, recorder, notes) VALUES (?, '지하수', ?, '관리자', '정상 검침')", (record_d, gw))
+        
+        purified = 100 + (365 - i) * 2
+        cursor.execute("INSERT INTO utility_usage (record_date, utility_type, consumption, recorder, notes) VALUES (?, '정수', ?, '관리자', '정상 검침')", (record_d, purified))
+        
+        elec = 5000 + (365 - i) * 150
+        cursor.execute("INSERT INTO utility_usage (record_date, utility_type, consumption, recorder, notes) VALUES (?, '전기사용량', ?, '관리자', '정상 검침')", (record_d, elec))
+        
+        lpg = 300 + (365 - i) * 8
+        cursor.execute("INSERT INTO utility_usage (record_date, utility_type, consumption, recorder, notes) VALUES (?, 'LPG가스', ?, '관리자', '정상 검침')", (record_d, lpg))
+    conn.commit()
 
 def init_db():
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
+        
+    cursor.execute('''CREATE TABLE IF NOT EXISTS inspection_history (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, 
+        ext_id TEXT, 
+        inspector TEXT, 
+        status TEXT, 
+        notes TEXT, 
+        timestamp TEXT, 
+        resolved INTEGER DEFAULT 0
+    )''')
     
-    # 사용자 관리 테이블
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT UNIQUE,
-            password_hash TEXT,
-            name TEXT,
-            dept TEXT,
-            role TEXT,
-            approved INTEGER,
-            created_at TIMESTAMP
-        )
-    ''')
+    cursor.execute('''CREATE TABLE IF NOT EXISTS extinguishers (
+        ext_id TEXT PRIMARY KEY, 
+        location TEXT
+    )''')
     
-    # 소화기 자산 테이블
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS extinguishers (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            소화기ID TEXT UNIQUE,
-            설치위치 TEXT
-        )
-    ''')
+    cursor.execute('''CREATE TABLE IF NOT EXISTS utility_usage (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, 
+        record_date TEXT, 
+        utility_type TEXT, 
+        consumption REAL, 
+        recorder TEXT, 
+        notes TEXT
+    )''')
     
-    # 소화기 점검 이력 테이블
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS inspection_history (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            점검시간 TEXT,
-            소화기ID TEXT,
-            점검자 TEXT,
-            상태 TEXT,
-            특이사항 TEXT,
-            조치상태 TEXT DEFAULT '미조치'
-        )
-    ''')
+    cursor.execute('''CREATE TABLE IF NOT EXISTS daily_exact_inspection (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, record_date TEXT, inspector TEXT,
+        al150_t1_1 TEXT, al150_t1_2 TEXT, al150_t1_3 TEXT, al150_t2_1 TEXT, al150_t2_2 TEXT, al150_t2_3 TEXT,
+        oil_temp_1 TEXT, oil_temp_2 TEXT, oil_temp_3 TEXT, run_time_1 TEXT, run_time_2 TEXT, run_time_3 TEXT,
+        load_time_1 TEXT, load_time_2 TEXT, load_time_3 TEXT, p1_1 TEXT, p1_2 TEXT, p1_3 TEXT,
+        p2_1 TEXT, p2_2 TEXT, p2_3 TEXT, oil_p_1 TEXT, oil_p_2 TEXT, oil_p_3 TEXT,
+        suc_t_1 TEXT, suc_t_2 TEXT, suc_t_3 TEXT, oil_lvl_1 TEXT, oil_lvl_2 TEXT, oil_lvl_3 TEXT,
+        cool_p_1 TEXT, cool_p_2 TEXT, cool_p_3 TEXT, cool_in_1 TEXT, cool_in_2 TEXT, cool_in_3 TEXT,
+        cool_out_1 TEXT, cool_out_2 TEXT, cool_out_3 TEXT, dryer_low_1 TEXT, dryer_low_2 TEXT, dryer_low_3 TEXT,
+        dryer_high_1 TEXT, dryer_high_2 TEXT, dryer_high_3 TEXT, dryer_air_1 TEXT, dryer_air_2 TEXT, dryer_air_3 TEXT,
+        dryer_drain_1 TEXT, dryer_drain_2 TEXT, dryer_drain_3 TEXT, tx_out_p TEXT, tx_oil_p TEXT, tx_suc_t TEXT, tx_oil_t TEXT,
+        tx_run_t TEXT, tx_load_t TEXT, tx_vib TEXT, tx_gap TEXT, tx_cin_t TEXT, tx_cout_t TEXT, tx_head_p TEXT,
+        tx_dryer_low TEXT, tx_dryer_high TEXT, tx_dryer_air TEXT, tx_dryer_drain TEXT,
+        pneu_leak TEXT, pneu_trap TEXT, pneu_mois TEXT, pneu_vib TEXT, pneu_curr TEXT,
+        tower_fan TEXT, tower_mach TEXT, tower_ext TEXT, tower_vib TEXT, tower_fill TEXT,
+        w_u_lvl TEXT, w_i_lvl TEXT, w_p_lvl TEXT, w_u_stat TEXT, w_h_stat TEXT, w_m_stat TEXT,
+        oil_sep TEXT, cool_cap TEXT, cool_t TEXT, hot_p TEXT, hot_t TEXT, hot_stat TEXT,
+        temp_mach TEXT, temp_outside TEXT, p_comp_p TEXT, p_comp_n TEXT, p_comp_s TEXT,
+        p_fac_p TEXT, p_fac_n TEXT, p_fac_s TEXT, p_off_p TEXT, p_off_n TEXT, p_off_s TEXT, etc_notes TEXT, timestamp TEXT
+    )''')
     
-    # 유틸리티 사용량 검침 테이블
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS utility_usage (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            기록일자 TEXT,
-            유틸리티종류 TEXT,
-            지침값 REAL,
-            기록자 TEXT,
-            특이사항 TEXT
-        )
-    ''')
+    cursor.execute('''CREATE TABLE IF NOT EXISTS confined_space_inspection (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, 
+        record_date TEXT, 
+        inspector TEXT, 
+        q_data TEXT, 
+        notes TEXT, 
+        timestamp TEXT
+    )''')
 
-    # 밀폐공간 점검 테이블
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS confined_space_inspection (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            record_date TEXT,
-            inspector TEXT,
-            q_data TEXT,
-            notes TEXT
-        )
-    ''')
+    cursor.execute('''CREATE TABLE IF NOT EXISTS fire_pump_inspection (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, 
+        record_date TEXT, 
+        category TEXT, 
+        inspector TEXT, 
+        q_data TEXT, 
+        notes TEXT, 
+        timestamp TEXT
+    )''')
 
-    # 소방 펌프 및 밸브 점검 테이블
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS fire_pump_inspection (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            record_date TEXT,
-            category TEXT,
-            inspector TEXT,
-            q_data TEXT,
-            notes TEXT,
-            timestamp TEXT
-        )
-    ''')
+    cursor.execute('''CREATE TABLE IF NOT EXISTS admin_users (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, 
+        username TEXT UNIQUE, 
+        password_hash TEXT, 
+        name TEXT, 
+        dept TEXT, 
+        role TEXT DEFAULT 'admin', 
+        approved INTEGER DEFAULT 0, 
+        created_at TEXT
+    )''')
 
-    # 일일 통합 설비 점검 테이블
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS exact_daily_inspection (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            record_date TEXT,
-            inspector TEXT,
-            al150_t1_1 TEXT, al150_t1_2 TEXT, al150_t1_3 TEXT,
-            al150_t2_1 TEXT, al150_t2_2 TEXT, al150_t2_3 TEXT,
-            oil_temp_1 TEXT, oil_temp_2 TEXT, oil_temp_3 TEXT,
-            run_time_1 TEXT, run_time_2 TEXT, run_time_3 TEXT,
-            load_time_1 TEXT, load_time_2 TEXT, load_time_3 TEXT,
-            p1_1 TEXT, p1_2 TEXT, p1_3 TEXT,
-            p2_1 TEXT, p2_2 TEXT, p2_3 TEXT,
-            oil_p_1 TEXT, oil_p_2 TEXT, oil_p_3 TEXT,
-            suc_t_1 TEXT, suc_t_2 TEXT, suc_t_3 TEXT,
-            oil_lvl_1 TEXT, oil_lvl_2 TEXT, oil_lvl_3 TEXT,
-            cool_p_1 TEXT, cool_p_2 TEXT, cool_p_3 TEXT,
-            cool_in_1 TEXT, cool_in_2 TEXT, cool_in_3 TEXT,
-            cool_out_1 TEXT, cool_out_2 TEXT, cool_out_3 TEXT,
-            dryer_low_1 TEXT, dryer_low_2 TEXT, dryer_low_3 TEXT,
-            dryer_high_1 TEXT, dryer_high_2 TEXT, dryer_high_3 TEXT,
-            dryer_air_1 TEXT, dryer_air_2 TEXT, dryer_air_3 TEXT,
-            dryer_drain_1 TEXT, dryer_drain_2 TEXT, dryer_drain_3 TEXT,
-            tx_out_p TEXT, tx_oil_p TEXT, tx_suc_t TEXT, tx_oil_t TEXT,
-            tx_run_t TEXT, tx_load_t TEXT, tx_vib TEXT, tx_gap TEXT,
-            tx_cin_t TEXT, tx_cout_t TEXT, tx_head_p TEXT,
-            tx_dryer_low TEXT, tx_dryer_high TEXT, tx_dryer_air TEXT, tx_dryer_drain TEXT,
-            pneu_leak TEXT, pneu_trap TEXT, pneu_mois TEXT, pneu_vib TEXT, pneu_curr TEXT,
-            tower_fan TEXT, tower_mach TEXT, tower_ext TEXT, tower_vib TEXT, tower_fill TEXT,
-            w_u_lvl TEXT, w_i_lvl TEXT, w_p_lvl TEXT,
-            w_u_stat TEXT, w_h_stat TEXT, w_m_stat TEXT,
-            oil_sep TEXT, cool_cap TEXT, cool_t TEXT,
-            hot_p TEXT, hot_t TEXT, hot_stat TEXT,
-            temp_mach TEXT, temp_outside TEXT,
-            p_comp_p TEXT, p_comp_n TEXT, p_comp_s TEXT,
-            p_fac_p TEXT, p_fac_n TEXT, p_fac_s TEXT,
-            p_off_p TEXT, p_off_n TEXT, p_off_s TEXT,
-            etc_notes TEXT
-        )
-    ''')
-
-    # 기본 마스터 계정 생성 (존재하지 않을 경우)
-    cursor.execute("SELECT COUNT(*) FROM users WHERE username = 'dolee'")
+    cursor.execute("SELECT COUNT(*) FROM admin_users WHERE username = 'dolee'")
     if cursor.fetchone()[0] == 0:
-        import hashlib
-        pw_hash = hashlib.sha256("1234".encode()).hexdigest()
-        cursor.execute(
-            "INSERT INTO users (username, password_hash, name, dept, role, approved, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            ("dolee", pw_hash, "마스터 관리자", "방재안전팀", "master", 1, datetime.now())
-        )
+        cursor.execute("INSERT INTO admin_users (username, password_hash, name, dept, role, approved, created_at) VALUES ('dolee', ?, '마스터 관리자', '', 'master', 1, ?)", 
+                       (hash_pw("2051"), datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+        conn.commit()
 
-    # 기본 소화기 자산 시드 데이터 (없을 경우)
     cursor.execute("SELECT COUNT(*) FROM extinguishers")
-    if cursor.fetchone()[0] == 0:
-        default_exts = [
-            ("ETC-1", "본관 1층 로비"),
-            ("ETC-2", "본관 2층 복도"),
-            ("ETC-3", "공장동 A구역"),
-            ("ETC-4", "공장동 B구역"),
-            ("ETC-5", "위험물 저장소")
+    if cursor.fetchone()[0] < 181:
+        cursor.execute("DELETE FROM extinguishers")
+        initial_extinguishers = [
+            ("ETC-1", "정문 경비실"), ("1-1-1", "중앙현관 1"), ("1-1-2", "중앙현관 2"), ("1-1-3", "전산 서버실"), ("1-1-4", "1층 사무실 1"),
+            ("1-1-5", "1층 교육장 1"), ("1-1-6", "1층 교육장 2"), ("1-1-7", "1층사무실2"), ("1-2-1", "재무 문서고"), ("1-2-2", "2층 사무실 1"),
+            ("1-2-3", "2층 사무실 2"), ("1-2-4", "2층 사무실 3"), ("1-2-5", "2층 사무실 4"), ("1-2-6", "2층 사무실 5"), ("1-2-7", "2층 복도 1"),
+            ("1-2-8", "2층 복도 2"), ("1-2-9", "2층 사무실 1"), ("1-2-10", "2층사무실 2"), ("1-2-11", "2층사무실 3"), ("1-2-12", "2층사무실 4"),
+            ("1-1-8", "29S측 탈의실"), ("1-1-9", "방화문 29S"), ("1-1-10", "방화문 29S"), ("1-1-11", "23S B1"), ("1-1-12", "23S B2"),
+            ("1-1-13", "23S B2"), ("1-1-14", "식당 홀 1"), ("1-1-15", "식당 홀 2"), ("1-1-16", "조리실 1"), ("1-1-17", "조리실 2"),
+            ("1-1-18", "29S 1"), ("1-1-19", "29S 2"), ("1-1-20", "29S 3"), ("1-1-21", "29S 4"), ("1-1-22", "ALT A"),
+            ("1-1-23", "Alt B"), ("1-1-24", "방화문 Alt 1"), ("1-1-25", "방화문 Alt 2"), ("1-1-26", "IDM 1"), ("1-1-27", "IDM 2"),
+            ("1-1-28", "IDM 3"), ("1-1-29", "방화문 IDM1"), ("1-1-30", "방화문 IDM2"), ("1-1-31", "탈의실 IDM"), ("1-1-32", "공무작업실"),
+            ("1-1-33", "자재 자동문"), ("1-1-34", "자재 사무실"), ("1-1-35", "직장 사무실"), ("1-1-36", "품질 사무실1"), ("1-1-37", "품질 사무실2"),
+            ("1-1-38", "완제품 탈의실"), ("1-1-39", "완제품 방화문"), ("1-1-40", "완제품 방화문"), ("1-1-41", "완제품 창고1"), ("1-1-42", "완제품 창고2"),
+            ("1-1-43", "완제품 창고3"), ("1-1-44", "B Line 방화문1"), ("1-1-45", "B Line 방화문2"), ("1-1-46", "구DG 방화문1"), ("1-1-47", "구DG 방화문2"),
+            ("1-1-48", "구DG 탈의실"), ("ETC-62", "PG측 파고라"), ("ETC-63", "후문 경비실"), ("ETC-64", "완제품 지게차 1"), ("ETC-65", "완제품 지게차 2"),
+            ("ETC-66", "공박스 보관소 1"), ("ETC-67", "공박스 보관소 2"), ("ETC-68", "공박스 보관소 3"), ("ETC-69", "자재창고 앞 파고라"), ("ETC-70", "시편 측정대 1"),
+            ("ETC-71", "시편 측정대 2"), ("ETC-72", "하역장 1"), ("ETC-73", "하역장 2"), ("ETC-74", "지게차 충전소1"), ("ETC-75", "지게차 충전소2"),
+            ("ETC-76", "시설 창고"), ("ETC-77", "유류저장소 1"), ("ETC-78", "유류저장소 2"), ("ETC-79", "유류저장소 3"), ("ETC-80", "유류저장소 4"),
+            ("ETC-81", "기계실 1"), ("ETC-82", "기계실 2"), ("ETC-83", "기계실 3"), ("ETC-84", "기계실 4"), ("ETC-85", "기계실 5"),
+            ("ETC-86", "기계실 6"), ("ETC-87", "전기실 1"), ("ETC-88", "전기실 2"), ("ETC-89", "전기실 3"), ("ETC-90", "전기실 4"),
+            ("ETC-91", "전기실 5"), ("ETC-92", "Engine Test Room 1"), ("ETC-93", "Engine Test Room 2"), ("ETC-94", "Engine Test Room 3"), ("ETC-95", "Engine Test Room 4"),
+            ("ETC-96", "외국인 휴게실"), ("ETC-97", "CFS 창고 1"), ("ETC-98", "CFS 창고 2"), ("ETC-99", "CFS 창고 3"), ("ETC-100", "QA Lab 1"),
+            ("ETC-101", "QA Lab 2"), ("ETC-102", "QA Lab 3"), ("ETC-103", "LPG 탱크 1"), ("ETC-104", "LPG 탱크 2"), ("ETC-105", "DR23S A 외부1"),
+            ("ETC-106", "DR23S A 외부2"), ("10-1-1", "DR23S A 내부1"), ("10-1-2", "DR23S A 내부2"), ("10-1-3", "DR23S A 내부3"), ("10-1-4", "DR23S A 내부4"),
+            ("10-1-5", "DR23S A 내부5"), ("10-1-6", "DR23S A 내부6"), ("ETC-113", "신축동 앞 파고라"), ("ETC-114", "신축동 측 집진기"), ("10-1-7", "신축동 로비"),
+            ("10-1-8", "신축동 1F 1"), ("10-1-9", "신축동 1F 2"), ("10-1-10", "신축동 1F 3"), ("10-1-11", "신축동 1F 4"), ("10-1-12", "진동시험실"),
+            ("10-1-13", "충격내구"), ("10-1-14", "내구시험실 1"), ("10-1-15", "내구시험실 2"), ("10-1-16", "내구시험실 3"), ("10-1-17", "무향실"),
+            ("10-1-18", "부식시험실"), ("10-2-1", "신축동 2F 1"), ("10-2-2", "신축동 2F 2"), ("10-2-3", "시작품제작실 1"), ("10-2-4", "시작품제작실 2"),
+            ("10-2-5", "시작품제작실 3"), ("12-1-1", "1F 로비"), ("12-1-2", "휴게실"), ("12-1-3", "측정실"), ("ETC-135", "위험물옥내저장소 1"),
+            ("ETC-136", "위험물옥내저장소 2"), ("ETC-137", "위험물옥내저장소 3"), ("ETC-138", "위험물옥내저장소 4"), ("ETC-139", "위험물옥내저장소 5"), ("12-1-4", "Stator 1"),
+            ("12-1-5", "Stator 2"), ("12-1-6", "Stator 3"), ("12-1-7", "Stator 4"), ("12-1-8", "Stator 5"), ("12-1-9", "Motor 1"),
+            ("12-1-10", "Motor 2"), ("12-1-11", "Motor 3"), ("12-1-12", "창고 1"), ("12-1-13", "창고 2"), ("12-1-14", "창고 3"),
+            ("12-1-15", "하역장 1"), ("12-1-16", "하역장 2"), ("12-1-17", "하역장 3"), ("12-1-18", "창고계단"), ("12-B1", "12동 B1, 펌프실"),
+            ("12-2-8", "2F 계단"), ("12-3-1", "3F 창고 1"), ("12-3-2", "3F 창고 2"), ("12-3-3", "3F 창고 3"), ("12-3-4", "3F보관소 1"),
+            ("12-3-5", "3F보관소 2"), ("12-3-6", "3F보관소 3"), ("12-3-7", "3F보관소 4"), ("12-3-8", "3F Invt 1"), ("12-3-9", "3F Invt 2"),
+            ("12-3-10", "3F Invt 3"), ("12-3-11", "3F Invt 4"), ("12-3-12", "3F 전산실"), ("12-3-13", "3F 복도"), ("12-3-14", "Invt 입구"),
+            ("12-3-15", "Invt 방풍실"), ("12-3-16", "분석실"), ("12-3-17", "회의실"), ("12-3-18", "휴게실"), ("12-2-1", "2F 남자 탈의실"),
+            ("12-2-2", "2F 복도 1"), ("12-2-3", "2F 온수탱크실"), ("12-2-4", "2F 여자 탈의실"), ("12-2-5", "2F 복도 2"), ("12-2-6", "2F 제품연구팀"),
+            ("12-2-7", "2F 회의실")
         ]
-        cursor.executemany("INSERT INTO extinguishers (소화기ID, 설치위치) VALUES (?, ?)", default_exts)
-
-    conn.commit()
+        for i in range(len(initial_extinguishers) + 1, 182):
+            initial_extinguishers.append((f"EXT-{i:03d}", f"공장 설비 구역 #{i}"))
+        for ext_id_val, location in initial_extinguishers:
+            cursor.execute('INSERT OR IGNORE INTO extinguishers (ext_id, location) VALUES (?, ?)', (ext_id_val, location))
+        conn.commit()
     conn.close()
 
-init_db()
-
-# ----------------------------------------------------
-# 2. 유틸리티 설정 및 헬퍼 함수
-# ----------------------------------------------------
-UTILITY_ORDER = [
-    "전기사용량", "상수도", "공업용수", 
-    "지하수", "LPG가스", "LNG가스"
-]
-UTILITY_COLORS = ["#2563eb", "#0284c7", "#0ea5e9", "#38bdf8", "#f97316", "#ea580c"]
-WATER_UTILITIES = ["상수도", "공업용수", "지하수"]
-
-def get_utility_unit(u_type):
-    if "전기" in u_type: return "kWh"
-    elif "가스" in u_type: return "Nm³"
-    else: return "톤(ton)"
-
-def get_all_extinguishers():
+def authenticate_user(username, password):
     conn = sqlite3.connect(db_path)
-    df = pd.read_sql_query("SELECT * FROM extinguishers", conn)
+    cur = conn.cursor()
+    cur.execute("SELECT username, name, role, approved FROM admin_users WHERE username = ? AND password_hash = ?", (username.strip(), hash_pw(password)))
+    user = cur.fetchone()
     conn.close()
-    return df
+    return {"username": user[0], "name": user[1], "role": user[2], "approved": user[3]} if user else None
 
-def get_history_with_id():
+def register_admin_request(username, password, name):
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     conn = sqlite3.connect(db_path)
-    df = pd.read_sql_query("""
-        SELECT h.id, h.점검시간, h.소화기ID, e.설치위치, h.점검자, h.상태, h.특이사항, h.조치상태
-        FROM inspection_history h
-        LEFT JOIN extinguishers e ON h.소화기ID = e.소화기ID
-        ORDER BY h.점검시간 DESC
-    """, conn)
-    conn.close()
-    return df
-
-def get_unresolved_issues():
-    conn = sqlite3.connect(db_path)
-    df = pd.read_sql_query("""
-        SELECT h.id, h.점검시간, h.소화기ID, e.설치위치, h.점검자, h.상태, h.특이사항
-        FROM inspection_history h
-        LEFT JOIN extinguishers e ON h.소화기ID = e.소화기ID
-        WHERE h.조치상태 = '미조치' AND h.상태 != '정상'
-        ORDER BY h.점검시간 DESC
-    """, conn)
-    conn.close()
-    return df
-
-def get_utility_df():
-    conn = sqlite3.connect(db_path)
-    df = pd.read_sql_query("SELECT * FROM utility_usage ORDER BY 기록일자 DESC, id DESC", conn)
-    conn.close()
-    return df
-
-def get_confined_space_logs():
-    conn = sqlite3.connect(db_path)
-    df = pd.read_sql_query("SELECT * FROM confined_space_inspection ORDER BY record_date DESC, id DESC", conn)
-    conn.close()
-    return df
-
-def get_fire_pump_logs():
-    conn = sqlite3.connect(db_path)
-    df = pd.read_sql_query("SELECT * FROM fire_pump_inspection ORDER BY record_date DESC, id DESC", conn)
-    conn.close()
-    return df
-
-def get_exact_daily_logs():
-    conn = sqlite3.connect(db_path)
-    df = pd.read_sql_query("SELECT * FROM exact_daily_inspection ORDER BY record_date DESC, id DESC", conn)
-    conn.close()
-    return df
+    try:
+        cur = conn.cursor()
+        cur.execute("INSERT INTO admin_users (username, password_hash, name, dept, role, approved, created_at) VALUES (?, ?, ?, '', 'admin', 0, ?)", 
+                     (username.strip(), hash_pw(password), name.strip(), now_str))
+        new_id = cur.lastrowid
+        conn.commit()
+        append_to_sheet("admin_users", [new_id, username.strip(), hash_pw(password), name.strip(), '', 'admin', 0, now_str])
+        return True
+    except:
+        return False
+    finally:
+        conn.close()
 
 def get_pending_admin_requests():
     conn = sqlite3.connect(db_path)
-    df = pd.read_sql_query("SELECT id, username AS 아이디, name AS 성명, dept AS 부서 FROM users WHERE approved = 0", conn)
-    conn.close()
-    return df
-
-def get_all_approved_users():
-    conn = sqlite3.connect(db_path)
-    df = pd.read_sql_query("SELECT id, username AS 아이디, name AS 성명, dept AS 부서, role AS 권한 FROM users WHERE approved = 1", conn)
+    df = pd.read_sql_query("SELECT id, username AS 아이디, name AS 성명, created_at AS 신청일시 FROM admin_users WHERE approved = 0", conn)
     conn.close()
     return df
 
 def approve_admin_request(user_id):
     conn = sqlite3.connect(db_path)
-    conn.execute("UPDATE users SET approved = 1 WHERE id = ?", (user_id,))
+    conn.execute("UPDATE admin_users SET approved = 1 WHERE id = ?", (user_id,))
     conn.commit()
     conn.close()
 
 def reject_or_delete_user(user_id):
     conn = sqlite3.connect(db_path)
-    conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
+    conn.execute("DELETE FROM admin_users WHERE id = ? AND role != 'master'", (user_id,))
     conn.commit()
     conn.close()
 
-def add_extinguisher(n_id, n_loc):
-    try:
-        conn = sqlite3.connect(db_path)
-        conn.execute("INSERT INTO extinguishers (소화기ID, 설치위치) VALUES (?, ?)", (n_id.strip(), n_loc.strip()))
-        conn.commit()
-        conn.close()
-        return True
-    except Exception:
-        return False
-
-def save_inspection(ext_id, inspector, status, notes):
+def get_all_approved_users():
     conn = sqlite3.connect(db_path)
-    conn.execute(
-        "INSERT INTO inspection_history (점검시간, 소화기ID, 점검자, 상태, 특이사항, 조치상태) VALUES (?, ?, ?, ?, ?, ?)",
-        (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), ext_id, inspector, status, notes, '미조치' if status != '정상' else '조치완료')
-    )
+    df = pd.read_sql_query("SELECT id, username AS 아이디, name AS 성명, role AS 권한, created_at AS 등록일시 FROM admin_users WHERE approved = 1", conn)
+    conn.close()
+    return df
+
+def save_inspection(ext_id_val, inspector, status, notes):
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    conn = sqlite3.connect(db_path)
+    cur = conn.cursor()
+    cur.execute('INSERT INTO inspection_history (ext_id, inspector, status, notes, timestamp, resolved) VALUES (?, ?, ?, ?, ?, 0)', 
+                 (ext_id_val, inspector, status, notes, now_str))
+    new_id = cur.lastrowid
     conn.commit()
     conn.close()
-    backup_to_gspreadsheet([datetime.now().strftime("%Y-%m-%d %H:%M:%S"), ext_id, inspector, status, notes], worksheet_name="inspection_history")
+    append_to_sheet("inspection_history", [new_id, ext_id_val, inspector, status, notes, now_str, 0])
 
-def mark_as_resolved(hid):
+def mark_as_resolved(history_id):
     conn = sqlite3.connect(db_path)
-    conn.execute("UPDATE inspection_history SET 조치상태 = '조치완료' WHERE id = ?", (hid,))
+    conn.execute("UPDATE inspection_history SET resolved = 1 WHERE id = ?", (history_id,))
     conn.commit()
     conn.close()
 
-def delete_inspection_history(hid):
+def delete_inspection_history(history_id):
     conn = sqlite3.connect(db_path)
-    conn.execute("DELETE FROM inspection_history WHERE id = ?", (hid,))
+    conn.execute("DELETE FROM inspection_history WHERE id = ?", (history_id,))
     conn.commit()
     conn.close()
 
@@ -333,19 +364,106 @@ def delete_all_inspection_history():
     conn.commit()
     conn.close()
 
-def save_utility_usage(record_date, utility_type, consumption, recorder, notes):
+def add_extinguisher(ext_id_val, location):
     conn = sqlite3.connect(db_path)
-    conn.execute(
-        "INSERT INTO utility_usage (기록일자, 유틸리티종류, 지침값, 기록자, 특이사항) VALUES (?, ?, ?, ?, ?)",
-        (record_date, utility_type, consumption, recorder, notes)
-    )
+    try:
+        conn.execute("INSERT INTO extinguishers (ext_id, location) VALUES (?, ?)", (ext_id_val, location))
+        conn.commit()
+        append_to_sheet("extinguishers", [ext_id_val, location])
+        return True
+    except:
+        return False
+    finally:
+        conn.close()
+
+def save_exact_daily_log(d):
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    cursor.execute("PRAGMA table_info(daily_exact_inspection)")
+    cols = [row[1] for row in cursor.fetchall() if row[1] != 'id']
+    d_copy = dict(d)
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    d_copy['timestamp'] = now_str
+    c_in = [c for c in cols if c in d_copy]
+    v_in = [d_copy[c] for c in c_in]
+    cursor.execute(f"INSERT INTO daily_exact_inspection ({', '.join(c_in)}) VALUES ({', '.join(['?'] * len(v_in))})", v_in)
+    new_id = cursor.lastrowid
     conn.commit()
     conn.close()
-    backup_to_gspreadsheet([record_date, utility_type, consumption, recorder, notes], worksheet_name="utility_usage")
+    row_values = [new_id] + [d_copy.get(col, '') for col in cols]
+    append_to_sheet("daily_exact_inspection", row_values)
 
-def delete_utility_usage(uid):
+def get_exact_daily_logs():
     conn = sqlite3.connect(db_path)
-    conn.execute("DELETE FROM utility_usage WHERE id = ?", (uid,))
+    df = pd.read_sql_query("SELECT * FROM daily_exact_inspection ORDER BY record_date DESC, id DESC", conn)
+    conn.close()
+    return df
+
+def delete_exact_daily_log(log_id):
+    conn = sqlite3.connect(db_path)
+    conn.execute("DELETE FROM daily_exact_inspection WHERE id = ?", (log_id,))
+    conn.commit()
+    conn.close()
+
+def delete_all_exact_daily_logs():
+    conn = sqlite3.connect(db_path)
+    conn.execute("DELETE FROM daily_exact_inspection")
+    conn.execute("DELETE FROM sqlite_sequence WHERE name='daily_exact_inspection'")
+    conn.commit()
+    conn.close()
+
+def get_all_extinguishers():
+    conn = sqlite3.connect(db_path)
+    df = pd.read_sql_query("SELECT ext_id AS 소화기ID, location AS 설치위치 FROM extinguishers ORDER BY ext_id", conn)
+    conn.close()
+    return df
+
+def get_history_with_id():
+    conn = sqlite3.connect(db_path)
+    df = pd.read_sql_query("""
+        SELECT h.id, h.timestamp AS 점검시간, h.ext_id AS 소화기ID, e.location AS 설치위치, 
+               h.inspector AS 점검자, h.status AS 상태, h.notes AS 특이사항, 
+               CASE WHEN h.resolved = 1 THEN '조치완료' 
+                    WHEN h.status != '정상' THEN '조치필요' 
+                    ELSE '정상' END AS 조치상태 
+        FROM inspection_history h 
+        LEFT JOIN extinguishers e ON h.ext_id = e.ext_id 
+        ORDER BY h.id DESC
+    """, conn)
+    conn.close()
+    return df
+
+def get_unresolved_issues():
+    conn = sqlite3.connect(db_path)
+    df = pd.read_sql_query("""
+        SELECT h.id, h.timestamp AS 점검시간, h.ext_id AS 소화기ID, e.location AS 설치위치, 
+               h.inspector AS 점검자, h.status AS 상태, h.notes AS 특이사항 
+        FROM inspection_history h 
+        LEFT JOIN extinguishers e ON h.ext_id = e.ext_id 
+        WHERE h.status != '정상' AND (h.resolved = 0 OR h.resolved IS NULL) 
+        ORDER BY h.id DESC
+    """, conn)
+    conn.close()
+    return df
+
+def get_utility_df():
+    conn = sqlite3.connect(db_path)
+    df = pd.read_sql_query("SELECT id, record_date AS 기록일자, utility_type AS 유틸리티종류, consumption AS 지침값, recorder AS 기록자, notes AS 특이사항 FROM utility_usage ORDER BY record_date ASC, id ASC", conn)
+    conn.close()
+    return df
+
+def save_utility_usage(record_date, utility_type, consumption, recorder, notes):
+    conn = sqlite3.connect(db_path)
+    cur = conn.cursor()
+    cur.execute('INSERT INTO utility_usage (record_date, utility_type, consumption, recorder, notes) VALUES (?, ?, ?, ?, ?)', (record_date, utility_type, consumption, recorder, notes))
+    new_id = cur.lastrowid
+    conn.commit()
+    conn.close()
+    append_to_sheet("utility_usage", [new_id, str(record_date), utility_type, consumption, recorder, notes])
+
+def delete_utility_usage(util_id):
+    conn = sqlite3.connect(db_path)
+    conn.execute("DELETE FROM utility_usage WHERE id = ?", (util_id,))
     conn.commit()
     conn.close()
 
@@ -357,13 +475,22 @@ def delete_all_utility_usage():
     conn.close()
 
 def save_confined_space_log(record_date, inspector, q_data, notes):
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    q_str = json.dumps(q_data, ensure_ascii=False)
     conn = sqlite3.connect(db_path)
-    conn.execute(
-        "INSERT INTO confined_space_inspection (record_date, inspector, q_data, notes) VALUES (?, ?, ?, ?)",
-        (str(record_date), inspector.strip(), json.dumps(q_data, ensure_ascii=False), notes.strip())
-    )
+    cur = conn.cursor()
+    cur.execute("INSERT INTO confined_space_inspection (record_date, inspector, q_data, notes, timestamp) VALUES (?, ?, ?, ?, ?)",
+                 (str(record_date), inspector.strip(), q_str, notes.strip(), now_str))
+    new_id = cur.lastrowid
     conn.commit()
     conn.close()
+    append_to_sheet("confined_space_inspection", [new_id, str(record_date), inspector.strip(), q_str, notes.strip(), now_str])
+
+def get_confined_space_logs():
+    conn = sqlite3.connect(db_path)
+    df = pd.read_sql_query("SELECT * FROM confined_space_inspection ORDER BY record_date DESC, id DESC", conn)
+    conn.close()
+    return df
 
 def delete_confined_space_log(log_id):
     conn = sqlite3.connect(db_path)
@@ -379,14 +506,22 @@ def delete_all_confined_space_logs():
     conn.close()
 
 def save_fire_pump_log(record_date, category, inspector, q_data, notes):
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    q_str = json.dumps(q_data, ensure_ascii=False)
     conn = sqlite3.connect(db_path)
-    conn.execute(
-        "INSERT INTO fire_pump_inspection (record_date, category, inspector, q_data, notes, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
-        (str(record_date), category, inspector.strip(), json.dumps(q_data, ensure_ascii=False), notes.strip(), datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-    )
+    cur = conn.cursor()
+    cur.execute("INSERT INTO fire_pump_inspection (record_date, category, inspector, q_data, notes, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
+                 (str(record_date), category, inspector.strip(), q_str, notes.strip(), now_str))
+    new_id = cur.lastrowid
     conn.commit()
     conn.close()
-    backup_to_gspreadsheet([str(record_date), category, inspector, notes], worksheet_name="fire_pump_inspection")
+    append_to_sheet("fire_pump_inspection", [new_id, str(record_date), category, inspector.strip(), q_str, notes.strip(), now_str])
+
+def get_fire_pump_logs():
+    conn = sqlite3.connect(db_path)
+    df = pd.read_sql_query("SELECT * FROM fire_pump_inspection ORDER BY record_date DESC, id DESC", conn)
+    conn.close()
+    return df
 
 def delete_fire_pump_log(log_id):
     conn = sqlite3.connect(db_path)
@@ -401,217 +536,201 @@ def delete_all_fire_pump_logs():
     conn.commit()
     conn.close()
 
-def save_exact_daily_log(d):
+def get_recent_inspection_this_month(ext_id_val):
     conn = sqlite3.connect(db_path)
-    cols = list(d.keys())
-    vals = list(d.values())
-    placeholders = ", ".join(["?"] * len(vals))
-    col_str = ", ".join(cols)
-    conn.execute(f"INSERT INTO exact_daily_inspection ({col_str}) VALUES ({placeholder})", vals)
-    conn.commit()
+    cur = conn.cursor()
+    cur.execute("SELECT timestamp, inspector, status, notes FROM inspection_history WHERE ext_id = ? AND timestamp LIKE ? ORDER BY id DESC LIMIT 1", (ext_id_val, f"{datetime.now().strftime('%Y-%m')}%"))
+    res = cur.fetchone()
     conn.close()
-    backup_to_gspreadsheet([d.get('record_date'), d.get('inspector'), "일일 통합 점검", d.get('etc_notes', '')], worksheet_name="daily_exact_inspection")
+    return res
 
-def delete_exact_daily_log(log_id):
+def get_utility_record_today(utility_type, target_date_str):
     conn = sqlite3.connect(db_path)
-    conn.execute("DELETE FROM exact_daily_inspection WHERE id = ?", (log_id,))
-    conn.commit()
+    cur = conn.cursor()
+    cur.execute("SELECT id, record_date, recorder, consumption, notes FROM utility_usage WHERE utility_type = ? AND record_date = ? ORDER BY id DESC LIMIT 1", (utility_type, target_date_str))
+    res = cur.fetchone()
     conn.close()
+    return res
 
-def delete_all_exact_daily_logs():
+def get_daily_inspection_today(target_date_str):
     conn = sqlite3.connect(db_path)
-    conn.execute("DELETE FROM exact_daily_inspection")
-    conn.execute("DELETE FROM sqlite_sequence WHERE name='exact_daily_inspection'")
-    conn.commit()
+    cur = conn.cursor()
+    cur.execute("SELECT id, record_date, inspector, timestamp FROM daily_exact_inspection WHERE record_date = ? ORDER BY id DESC LIMIT 1", (target_date_str,))
+    res = cur.fetchone()
     conn.close()
+    return res
 
-def get_daily_inspection_today(tdy):
+def get_confined_space_today(target_date_str):
     conn = sqlite3.connect(db_path)
-    cursor = conn.cursor()
-    cursor.execute("SELECT id, record_date, inspector FROM exact_daily_inspection WHERE record_date = ?", (tdy,))
-    row = cursor.fetchone()
+    cur = conn.cursor()
+    cur.execute("SELECT id, record_date, inspector FROM confined_space_inspection WHERE record_date = ? ORDER BY id DESC LIMIT 1", (target_date_str,))
+    res = cur.fetchone()
     conn.close()
-    return row
+    return res
 
-def get_confined_space_today(tdy):
+def get_fire_pump_today(category, target_date_str):
     conn = sqlite3.connect(db_path)
-    cursor = conn.cursor()
-    cursor.execute("SELECT id, record_date, inspector FROM confined_space_inspection WHERE record_date = ?", (tdy,))
-    row = cursor.fetchone()
+    cur = conn.cursor()
+    cur.execute("SELECT id, record_date, inspector FROM fire_pump_inspection WHERE category = ? AND record_date = ? ORDER BY id DESC LIMIT 1", (category, target_date_str))
+    res = cur.fetchone()
     conn.close()
-    return row
+    return res
 
-def get_fire_pump_today(cat, tdy):
-    conn = sqlite3.connect(db_path)
-    cursor = conn.cursor()
-    cursor.execute("SELECT id, record_date, inspector FROM fire_pump_inspection WHERE category = ? AND record_date = ?", (cat, tdy))
-    row = cursor.fetchone()
-    conn.close()
-    return row
-
-def get_utility_record_today(u_type, tdy):
-    conn = sqlite3.connect(db_path)
-    cursor = conn.cursor()
-    cursor.execute("SELECT id, 기록일자, 기록자, 지침값 FROM utility_usage WHERE 유틸리티종류 = ? AND 기록일자 = ?", (u_type, tdy))
-    row = cursor.fetchone()
-    conn.close()
-    return row
+def generate_qr_image_with_label(main_text, sub_text, url):
+    qr = qrcode.QRCode(version=1, error_correction=qrcode.constants.ERROR_CORRECT_M, box_size=10, border=3)
+    qr.add_data(url)
+    qr.make(fit=True)
+    qr_img = qr.make_image(fill_color="#0f172a", back_color="white").convert('RGB')
+    new_img = Image.new('RGB', (qr_img.size[0], qr_img.size[1] + 70), 'white')
+    new_img.paste(qr_img, (0, 0))
+    draw = ImageDraw.Draw(new_img)
+    try:
+        f_b = ImageFont.truetype(r"C:\Windows\Fonts\malgunbd.ttf", 15)
+        f_n = ImageFont.truetype(r"C:\Windows\Fonts\malgun.ttf", 13)
+    except:
+        f_b = f_n = ImageFont.load_default()
+    draw.text((15, qr_img.size[1] + 8), main_text, fill="#0f172a", font=f_b)
+    draw.text((15, qr_img.size[1] + 34), sub_text, fill="#64748b", font=f_n)
+    buf = io.BytesIO()
+    new_img.save(buf, format="PNG")
+    return buf.getvalue()
 
 def check_factory_anomalies(u_df):
     alerts = []
     if u_df.empty:
         return alerts
-    df = u_df.copy()
-    df['parsed'] = pd.to_datetime(df['기록일자'], errors='coerce')
-    df = df.sort_values(['유틸리티종류', 'parsed', 'id'])
-    df['구간사용량'] = (df['지침값'] - df.groupby('유틸리티종류')['지침값'].shift(1)).clip(lower=0)
-    
-    recent = df.groupby('유틸리티종류').tail(1)
-    for _, r in recent.iterrows():
-        ut = r['유틸리티종류']
-        val = r['구간사용량']
-        if "가스" in ut and val > 500:
-            alerts.append({'id': f"gas_{r['id']}", 'level': 'error', 'title': f"🔥 {ut} 급증 경보", 'body': f"최근 검침량({val:,.1f} {get_utility_unit(ut)})이 평상시보다 급증했습니다."})
-        elif "전기" in ut and val > 50000:
-            alerts.append({'id': f"elec_{r['id']}", 'level': 'warning', 'title': f"⚡ {ut} 부하 주의", 'body': f"최근 전력 소비량({val:,.1f} kWh)이 높습니다."})
+    for u_type in UTILITY_ORDER:
+        sub = u_df[u_df['유틸리티종류'] == u_type].sort_values(['기록일자', 'id']).copy()
+        if len(sub) < 2:
+            continue
+        sub['date_dt'] = pd.to_datetime(sub['기록일자'])
+        sub['days_diff'] = (sub['date_dt'] - sub['date_dt'].shift(1)).dt.days.fillna(1).clip(lower=1)
+        sub['daily_usage'] = ((sub['지침값'] - sub['지침값'].shift(1)).clip(lower=0) / sub['days_diff']).round(1)
+        
+        latest = sub.iloc[-1]
+        valid_past = sub.iloc[:-1]['daily_usage'].dropna()
+        if len(valid_past) < 1:
+            continue
+        avg_d = valid_past.mean()
+        cur_d = latest['daily_usage']
+        d_diff = int(latest['days_diff'])
+
+        if u_type in WATER_UTILITIES:
+            if avg_d > 0 and cur_d >= (avg_d * 1.25) and (cur_d - avg_d) >= 4.0:
+                alerts.append({
+                    'id': f"leak_{u_type}", 
+                    'level': 'error', 
+                    'title': f'🚨 [누수 의심 경보] {u_type}', 
+                    'body': f"• 검침 일자: {latest['기록일자']}\n\n• 금일 사용량(1일 환산): {cur_d:,.0f} Ton (평소 평일 평균 {avg_d:,.0f} Ton)\n\n• 분석 결과: 평소 대비 {cur_d/avg_d:.1f}배 급증"
+                })
+                continue
+            if len(sub) >= 4:
+                r3 = sub.iloc[-3:]['daily_usage'].tolist()
+                if r3[0] < r3[1] < r3[2] and (((r3[2] - r3[0]) / r3[0] * 100) >= 15.0) and ((r3[2] - r3[0]) >= 2.0):
+                    alerts.append({
+                        'id': f"micro_{u_type}", 
+                        'level': 'warning', 
+                        'title': f'⚠️ [미세 누수 주의] {u_type}', 
+                        'body': f"• 최근 사용량 추이: {r3[0]:,.0f} ➔ {r3[1]:,.0f} ➔ {r3[2]:,.0f} Ton\n\n• 분석 결과: 3회 연속 점진적 증가 감지"
+                    })
+            if d_diff >= 3 and cur_d >= (avg_d * 0.4) and cur_d >= 4.0:
+                alerts.append({
+                    'id': f"weekend_{u_type}", 
+                    'level': 'warning', 
+                    'title': f'🔍 [주말 기저 누수 의심] {u_type}', 
+                    'body': f"• 비가동 기간 총 소모량: {(cur_d * d_diff):,.0f} Ton (일평균 {cur_d:,.0f} Ton)\n\n• 분석 결과: 공장 휴무 기간 동안 평일의 40% 이상 물이 지속 소모됨"
+                })
+        else:
+            if avg_d > 0 and cur_d >= (avg_d * 1.8) and (cur_d - avg_d) >= 10.0:
+                unit = 'kWh' if '전기' in u_type else '㎥'
+                alerts.append({
+                    'id': f"over_{u_type}", 
+                    'level': 'error', 
+                    'title': f'🚨 [과다 소비 경고] {u_type}', 
+                    'body': f"• 금일 사용량: {cur_d:,.1f} {unit} (평소 평균 {avg_d:,.1f} {unit})\n\n• 분석 결과: 평소 대비 {cur_d/avg_d:.1f}배 급증"
+                })
     return alerts
 
-def seed_test_utility_data(conn):
-    cursor = conn.cursor()
-    base_date = date.today() - timedelta(days=365)
-    for i in range(365):
-        d_str = str(base_date + timedelta(days=i))
-        for idx, ut in enumerate(UTILITY_ORDER):
-            base_val = 1000 + i * (10 + idx * 5)
-            cursor.execute("INSERT INTO utility_usage (기록일자, 유틸리티종류, 지침값, 기록자, 특이사항) VALUES (?, ?, ?, ?, ?)",
-                           (d_str, ut, float(base_val), "시스템시드", "자동생성"))
-    conn.commit()
-
-def generate_qr_image_with_label(top_text, bottom_text, url):
-    qr = qrcode.QRCode(version=1, box_size=10, border=2)
-    qr.add_data(url)
-    qr.make(fit=True)
-    img = qr.make_image(fill_color="black", back_color="white")
-    return img
+init_db()
 
 # ----------------------------------------------------
-# 3. Streamlit 페이지 설정 및 세션 상태 초기화
+# 4. 세션 상태 관리 및 라우팅 파라미터 처리
 # ----------------------------------------------------
-st.set_page_config(page_title="시설안전 통합관제", layout="wide", page_icon="🏢")
+if 'auth_user' not in st.session_state: st.session_state['auth_user'] = None
+if 'custom_host_url' not in st.session_state: st.session_state['custom_host_url'] = DEFAULT_HOST_BASE_URL
+if 'acknowledged_alerts' not in st.session_state: st.session_state['acknowledged_alerts'] = set()
 
-if 'user' not in st.session_state:
-    st.session_state['user'] = None
-if 'acknowledged_alerts' not in st.session_state:
-    st.session_state['acknowledged_alerts'] = set()
-if 'custom_host_url' not in st.session_state:
-    st.session_state['custom_host_url'] = "https://facilitymanagementapp-djlee.streamlit.app"
-
-# URL 쿼리 파라미터 처리
-qp = st.query_params
-ext_id_param = qp.get("ext_id", None)
-utility_param = qp.get("utility", None)
-cf_scan_param = qp.get("cf_scan", None)
-fp_scan_param = qp.get("fp_scan", None)
-daily_scan_param = qp.get("daily_scan", None)
-
+is_admin = st.session_state['auth_user'] is not None
+active_user = st.session_state['auth_user']
+is_master = is_admin and active_user['role'] == 'master'
 active_host_url = st.session_state['custom_host_url']
 
-# ----------------------------------------------------
-# 4. 로그인 및 회원가입 모달/사이드바 처리
-# ----------------------------------------------------
-if st.session_state['user'] is None:
-    st.markdown("""
-        <style>
-        .login-card { max-width: 420px; margin: 60px auto; padding: 30px; background: var(--secondary-background-color); border-radius: 12px; border: 1px solid rgba(128,128,128,0.2); }
-        </style>
-    """, unsafe_allow_html=True)
-    
-    col1, col2, col3 = st.columns([1, 1.2, 1])
-    with col2:
-        st.markdown("<div class='login-card'>", unsafe_allow_html=True)
-        st.markdown("<h2>🏢 시설안전 통합관제 로그인</h2>", unsafe_allow_html=True)
-        tab_l, tab_r = st.tabs(["로그인", "계정 신청"])
-        
-        with tab_l:
-            with st.form("login_form"):
-                u_in = st.text_input("아이디")
-                p_in = st.text_input("비밀번호", type="password")
-                if st.form_submit_button("로그인", use_container_width=True):
-                    import hashlib
-                    ph = hashlib.sha256(p_in.encode()).hexdigest()
-                    conn = sqlite3.connect(db_path)
-                    cur = conn.cursor()
-                    cur.execute("SELECT id, username, name, dept, role, approved FROM users WHERE username = ? AND password_hash = ?", (u_in.strip(), ph))
-                    user_row = cur.fetchone()
-                    conn.close()
-                    
-                    if user_row:
-                        if user_row[5] == 1:
-                            st.session_state['user'] = {'id': user_row[0], 'username': user_row[1], 'name': user_row[2], 'dept': user_row[3], 'role': user_row[4]}
-                            st.success("로그인 성공!")
-                            st.rerun()
-                        else:
-                            st.warning("관리자 승인 대기 중인 계정입니다.")
-                    else:
-                        st.error("아이디 또는 비밀번호가 일치하지 않습니다.")
-                        
-        with tab_r:
-            with st.form("reg_form"):
-                r_id = st.text_input("사용할 아이디")
-                r_pw = st.text_input("비밀번호", type="password")
-                r_name = st.text_input("성명")
-                r_dept = st.text_input("소속 부서")
-                if st.form_submit_button("가입 신청", use_container_width=True):
-                    if not r_id or not r_pw or not r_name:
-                        st.error("필수 정보를 입력하세요.")
-                    else:
-                        try:
-                            import hashlib
-                            ph = hashlib.sha256(r_pw.encode()).hexdigest()
-                            conn = sqlite3.connect(db_path)
-                            conn.execute("INSERT INTO users (username, password_hash, name, dept, role, approved, created_at) VALUES (?, ?, ?, ?, ?, 0, ?)",
-                                         (r_id.strip(), ph, r_name.strip(), r_dept.strip(), 'inspector', datetime.now()))
-                            conn.commit()
-                            conn.close()
-                            st.success("가입 신청 완료! 관리자 승인 후 로그인할 수 있습니다.")
-                        except Exception:
-                            st.error("이미 존재하는 아이디입니다.")
-        st.markdown("</div>", unsafe_allow_html=True)
-    st.stop()
+params = st.query_params
+ext_id_param = params.get('ext_id', None)
+utility_param = params.get('utility', None)
+daily_scan_param = params.get('daily_scan', None)
+cf_scan_param = params.get('cf_scan', None)
+fp_scan_param = params.get('fp_scan', None)
+
+menu_list = ["📊 통합 종합 대시보드", "📋 일일 통합 점검", "🧯 소화기 점검 관리", "⚡ 유틸리티 사용량 관리", "🧱 밀폐공간 점검", "🧯 소방 펌프 및 밸브 점검"]
+default_menu_idx = 0
+if daily_scan_param: default_menu_idx = 1
+elif ext_id_param: default_menu_idx = 2
+elif utility_param: default_menu_idx = 3
+elif cf_scan_param: default_menu_idx = 4
+elif fp_scan_param: default_menu_idx = 5
 
 # ----------------------------------------------------
-# 5. 사이드바 메뉴 구성
+# 5. 사이드바 메뉴 및 관리자 도구
 # ----------------------------------------------------
-current_user = st.session_state['user']
-is_admin = current_user['role'] == 'master'
-
-st.sidebar.markdown(f"### 👤 {current_user['name']} 님")
-st.sidebar.caption(f"소속: {current_user['dept']} ({current_user['role']})")
-if st.sidebar.button("로그아웃", use_container_width=True):
-    st.session_state['user'] = None
-    st.rerun()
-
+st.sidebar.markdown("### 🏢 시설안전 통합관제")
+menu = st.sidebar.radio("📌 메뉴 선택", menu_list, index=default_menu_idx, key="main_menu_radio")
 st.sidebar.markdown("---")
-st.sidebar.markdown("### 📌 메뉴 선택")
-menu = st.sidebar.radio(
-    "메뉴",
-    [
-        "📊 통합 종합 대시보드",
-        "📋 일일 통합 점검",
-        "🧯 소화기 점검 관리",
-        "⚡ 유틸리티 사용량 관리",
-        "🧱 밀폐공간 점검",
-        "🧯 소방 펌프 및 밸브 점검"
-    ],
-    label_visibility="collapsed"
-)
 
-if is_admin:
-    with st.sidebar.expander("⚙️ 시스템 설정", expanded=False):
-        i_url = st.text_input("접속 주소", value=active_host_url)
-        if i_url.strip() and i_url.strip().rstrip('/') != active_host_url:
-            st.session_state['custom_host_url'] = i_url.strip().rstrip('/')
-            st.rerun()
+if not is_admin:
+    st.sidebar.markdown("<div class='inspector-badge'><span style='color:#22c55e;font-size:13px;font-weight:800;'>👷 현장 점검자 모드</span><br><span style='font-size:11px;opacity:0.8;'>정기 점검 및 등록 전용</span></div>", unsafe_allow_html=True)
+    with st.sidebar.expander("🔐 관리자 로그인 (원격PC)", expanded=False):
+        with st.form("auth_login_form"):
+            l_id = st.text_input("아이디")
+            l_pw = st.text_input("비밀번호", type="password")
+            if st.form_submit_button("로그인", use_container_width=True):
+                u_info = authenticate_user(l_id, l_pw)
+                if u_info and u_info['approved'] == 1:
+                    st.session_state['auth_user'] = u_info
+                    st.rerun()
+                elif u_info: 
+                    st.warning("승인 대기 중인 계정입니다.")
+                else: 
+                    st.error("아이디/비밀번호 오류")
+
+    with st.sidebar.expander("📝 관리자 계정 신청", expanded=False):
+        with st.form("auth_reg_form"):
+            r_id = st.text_input("희망 아이디")
+            r_pw = st.text_input("희망 비밀번호", type="password")
+            r_nm = st.text_input("성명 (이름)")
+            if st.form_submit_button("신청 제출", use_container_width=True):
+                if r_id and r_pw and r_nm:
+                    if register_admin_request(r_id, r_pw, r_nm): 
+                        st.success("마스터 승인 대기 중!")
+                    else: 
+                        st.warning("이미 존재하는 아이디입니다.")
+                else: 
+                    st.error("모든 항목을 입력해주세요.")
+else:
+    st.sidebar.markdown(f"<div class='admin-badge'><span style='color:#ef4444;font-size:13px;font-weight:800;'>🔐 {'마스터' if is_master else '운영'} 관리자</span><br><span style='font-size:12px;font-weight:700;'>{active_user['name']}</span></div>", unsafe_allow_html=True)
+    if st.sidebar.button("🚪 로그아웃", use_container_width=True, key="btn_logout_main"):
+        st.session_state['auth_user'] = None
+        st.rerun()
+
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("⚙️ 관리자 도구")
+
+    if is_master:
+        with st.sidebar.expander("🌐 도메인(URL) 설정", expanded=False):
+            i_url = st.text_input("접속 주소", value=active_host_url)
+            if i_url.strip() and i_url.strip().rstrip('/') != active_host_url:
+                st.session_state['custom_host_url'] = i_url.strip().rstrip('/')
+                st.rerun()
         with st.sidebar.expander("👥 계정 권한 관리", expanded=False):
             pend = get_pending_admin_requests()
             for _, r in pend.iterrows():
@@ -1155,7 +1274,7 @@ elif menu == "📋 일일 통합 점검":
                         'hot_p': hot_p, 'hot_t': hot_t, 'hot_stat': hot_stat,
                         'temp_mach': temp_mach, 'temp_outside': temp_outside,
                         'p_comp_p': p_comp_p, 'p_comp_n': p_comp_n, 'p_comp_s': p_comp_s,
-                        'p_fac_p': p_fac_n, 'p_fac_n': p_fac_n, 'p_fac_s': p_fac_s,
+                        'p_fac_p': p_fac_p, 'p_fac_n': p_fac_n, 'p_fac_s': p_fac_s,
                         'p_off_p': p_off_p, 'p_off_n': p_off_n, 'p_off_s': p_off_s,
                         'etc_notes': etc_notes.strip()
                     })
