@@ -87,7 +87,9 @@ if "sheet_alert" in st.session_state:
 UTILITY_ORDER = ["상수도(메인)", "상수도(식당)", "지하수", "정수", "전기사용량", "LPG가스"]
 UTILITY_COLORS = ['#2563eb', '#60a5fa', '#f59e0b', '#10b981', '#ef4444', '#9467bd']
 WATER_UTILITIES = ["상수도(메인)", "상수도(식당)", "지하수", "정수"]
-DEFAULT_HOST_BASE_URL = "https://administrative-expertise-saying-geological.trycloudflare.com"
+
+# [팁] 아래 따옴표 안에 현재 웹사이트 주소를 적어두시면 기본값으로 계속 유지됩니다!
+DEFAULT_HOST_BASE_URL = "https://integrated-facility-inspection-and-control-system-by-dj-lee.streamlit.app"
 
 db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "facility.db")
 
@@ -101,6 +103,27 @@ def get_utility_unit(u_type):
         return "㎥"
     else:
         return "Ton"
+
+# --- 환경설정 영구 저장 및 불러오기 함수 ---
+def get_system_config(key, default_val=""):
+    try:
+        conn = sqlite3.connect(db_path)
+        cur = conn.cursor()
+        cur.execute("SELECT value FROM system_config WHERE key = ?", (key,))
+        row = cur.fetchone()
+        conn.close()
+        return row[0] if row else default_val
+    except Exception:
+        return default_val
+
+def set_system_config(key, val):
+    try:
+        conn = sqlite3.connect(db_path)
+        conn.execute("INSERT OR REPLACE INTO system_config (key, value) VALUES (?, ?)", (key, str(val)))
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
 
 # --- 구글 시트 연동 핵심 함수 (저장, 수정, 삭제, 전체 복원) ---
 def get_gspread_client():
@@ -292,6 +315,12 @@ def init_db():
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
         
+    # 설정값 영구 보관용 테이블
+    cursor.execute('''CREATE TABLE IF NOT EXISTS system_config (
+        key TEXT PRIMARY KEY,
+        value TEXT
+    )''')
+
     cursor.execute('''CREATE TABLE IF NOT EXISTS inspection_history (
         id INTEGER PRIMARY KEY AUTOINCREMENT, 
         ext_id TEXT, 
@@ -812,7 +841,12 @@ init_db()
 # 4. 세션 상태 관리 및 라우팅 파라미터 처리
 # ----------------------------------------------------
 if 'auth_user' not in st.session_state: st.session_state['auth_user'] = None
-if 'custom_host_url' not in st.session_state: st.session_state['custom_host_url'] = DEFAULT_HOST_BASE_URL
+
+# [핵심] 마지막으로 DB에 저장되었던 고정 URL을 불러와 세션에 유지!
+saved_url = get_system_config("host_url", DEFAULT_HOST_BASE_URL)
+if 'custom_host_url' not in st.session_state: 
+    st.session_state['custom_host_url'] = saved_url
+
 if 'acknowledged_alerts' not in st.session_state: st.session_state['acknowledged_alerts'] = set()
 
 is_admin = st.session_state['auth_user'] is not None
@@ -895,9 +929,13 @@ else:
     if is_master:
         with st.sidebar.expander("🌐 도메인(URL) 설정", expanded=False):
             i_url = st.text_input("접속 주소", value=active_host_url)
+            # [핵심] 주소를 변경하면 세션뿐 아니라 DB에도 영구 저장하여 새로고침 시 리셋 방지!
             if i_url.strip() and i_url.strip().rstrip('/') != active_host_url:
-                st.session_state['custom_host_url'] = i_url.strip().rstrip('/')
+                new_url = i_url.strip().rstrip('/')
+                st.session_state['custom_host_url'] = new_url
+                set_system_config("host_url", new_url)
                 st.rerun()
+
         with st.sidebar.expander("👥 계정 권한 관리", expanded=False):
             pend = get_pending_admin_requests()
             for _, r in pend.iterrows():
@@ -1637,3 +1675,319 @@ elif menu == "🧱 밀폐공간 점검":
             with c2: cs_ins = st.text_input("점검자 성명", disabled=not allow_cs)
             
             st.markdown("---")
+            st.markdown("### 1️⃣ 출입통제 (시건장치 여부)")
+            c_c1, c_c2 = st.columns(2)
+            with c_c1:
+                q1 = st.radio("1-1. 지하피트", ["O", "X"], disabled=not allow_cs, horizontal=True)
+                q2 = st.radio("1-2. 냉각수조", ["O", "X"], disabled=not allow_cs, horizontal=True)
+                q3 = st.radio("1-3. 고가수조", ["O", "X"], disabled=not allow_cs, horizontal=True)
+                q4 = st.radio("1-4. 지하수조", ["O", "X"], disabled=not allow_cs, horizontal=True)
+                q5 = st.radio("1-5. 정화조 1", ["O", "X"], disabled=not allow_cs, horizontal=True)
+                q6 = st.radio("1-6. 정화조 2", ["O", "X"], disabled=not allow_cs, horizontal=True)
+                q7 = st.radio("1-7. 정화조 3", ["O", "X"], disabled=not allow_cs, horizontal=True)
+                q8 = st.radio("1-8. 침전조", ["O", "X"], disabled=not allow_cs, horizontal=True)
+            with c_c2:
+                q9 = st.radio("1-9. 집수조", ["O", "X"], disabled=not allow_cs, horizontal=True)
+                q10 = st.radio("1-10. 유수분리조", ["O", "X"], disabled=not allow_cs, horizontal=True)
+                q11 = st.radio("1-11. 지하펌프실", ["O", "X"], disabled=not allow_cs, horizontal=True)
+                q12 = st.radio("1-12. 기계실 내부피트", ["O", "X"], disabled=not allow_cs, horizontal=True)
+                q13 = st.radio("1-13. 엔진룸 챔버", ["O", "X"], disabled=not allow_cs, horizontal=True)
+                q14 = st.radio("1-14. 정화조 4 (도로용 덮개 폐쇄 여부)", ["O", "X"], disabled=not allow_cs, horizontal=True)
+                q15 = st.radio("1-15. 정화조 5 (도로용 덮개 폐쇄 여부)", ["O", "X"], disabled=not allow_cs, horizontal=True)
+                q16 = st.radio("2. 각 위치별 위험표지판 부착 여부", ["O", "X"], disabled=not allow_cs, horizontal=True)
+                q17 = st.radio("3. 비상연락망 기재 여부", ["O", "X"], disabled=not allow_cs, horizontal=True)
+
+            st.markdown("---")
+            st.markdown("### 2️⃣ 환기장치 & 3️⃣ 측정장치 및 보호구")
+            v_c1, v_c2 = st.columns(2)
+            with v_c1:
+                st.markdown("##### ■ 환기장치")
+                q18 = st.radio("4. 정상작동 여부 (팬 작동/송풍관 누출)", ["O", "X"], disabled=not allow_cs, horizontal=True)
+                q19 = st.radio("5. 환기장치 가동상태 식별표시", ["O", "X"], disabled=not allow_cs, horizontal=True)
+                q20 = st.radio("6. 전선 피복 손상 여부", ["O", "X"], disabled=not allow_cs, horizontal=True)
+                q21 = st.radio("7. 팬 먼지 쌓임 여부", ["O", "X"], disabled=not allow_cs, horizontal=True)
+                st.markdown("##### ■ 측정장치")
+                q22 = st.radio("9. 측정기 경고장치 필증 (1년 이내)", ["O", "X"], disabled=not allow_cs, horizontal=True)
+                q23 = st.radio("10. 배터리 충분 여부", ["O", "X"], disabled=not allow_cs, horizontal=True)
+                q24 = st.radio("11. 산소 측정치 (18~23.5% 범위 내)", ["O", "X"], disabled=not allow_cs, horizontal=True)
+            with v_c2:
+                st.markdown("##### ■ 무전기 & 안전보호구")
+                q25 = st.radio("8. 안전보호구 정해진 위치 보관", ["O", "X"], disabled=not allow_cs, horizontal=True)
+                q26 = st.radio("12. 무전기 배터리 충전 여부", ["O", "X"], disabled=not allow_cs, horizontal=True)
+                q27 = st.radio("13. 무전기 주파수 동일 설정", ["O", "X"], disabled=not allow_cs, horizontal=True)
+                q28 = st.radio("14. 송수신 가능 여부", ["O", "X"], disabled=not allow_cs, horizontal=True)
+                q29 = st.radio("15. 무전기 음량 충분", ["O", "X"], disabled=not allow_cs, horizontal=True)
+
+            st.markdown("---")
+            st.markdown("### 4️⃣ 들것, 삼각대, 공기호흡기")
+            e_c1, e_c2 = st.columns(2)
+            with e_c1:
+                st.markdown("##### ■ 들것 및 삼각대")
+                q30 = st.radio("16. 들것 파손/끈 끊어짐 여부", ["O", "X"], disabled=not allow_cs, horizontal=True)
+                q31 = st.radio("17. 삼각대 파손 부위 (설치 가능 여부)", ["O", "X"], disabled=not allow_cs, horizontal=True)
+                q32 = st.radio("18. 삼각대 윈치 정상 작동", ["O", "X"], disabled=not allow_cs, horizontal=True)
+            with e_c2:
+                st.markdown("##### ■ 공기호흡기")
+                q33 = st.radio("19. 용기 내 산소용량 적정 (압력/용량)", ["O", "X"], disabled=not allow_cs, horizontal=True)
+                q34 = st.radio("20. 안면부 새는 곳 (보조 마스크)", ["O", "X"], disabled=not allow_cs, horizontal=True)
+                q35 = st.radio("21. 마스크 밸브 정상작동", ["O", "X"], disabled=not allow_cs, horizontal=True)
+                q36 = st.radio("22. 연결호스 파손 여부", ["O", "X"], disabled=not allow_cs, horizontal=True)
+
+            cs_notes = st.text_area("비고 및 특이사항", height=80, disabled=not allow_cs)
+
+            if st.form_submit_button("💾 밀폐공간 점검표 저장", use_container_width=True, disabled=not allow_cs):
+                if not cs_ins.strip():
+                    st.error("점검자 성명을 입력해주세요.")
+                else:
+                    q_data = {
+                        "1-1": q1, "1-2": q2, "1-3": q3, "1-4": q4, "1-5": q5, "1-6": q6, "1-7": q7, "1-8": q8,
+                        "1-9": q9, "1-10": q10, "1-11": q11, "1-12": q12, "1-13": q13, "1-14": q14, "1-15": q15,
+                        "2": q16, "3": q17, "4": q18, "5": q19, "6": q20, "7": q21, "9": q22, "10": q23, "11": q24,
+                        "8": q25, "12": q26, "13": q27, "14": q28, "15": q29, "16": q30, "17": q31, "18": q32,
+                        "19": q33, "20": q34, "21": q35, "22": q36
+                    }
+                    save_confined_space_log(cs_date, cs_ins, q_data, cs_notes)
+                    st.rerun()
+
+    with tab_cs2:
+        st.subheader("📂 밀폐공간 점검 기록 리포트 조회 및 다운로드")
+        cs_df = get_confined_space_logs()
+        if not cs_df.empty:
+            sel_d_obj = st.date_input("📅 조회 및 다운로드할 점검 일자 선택", value=datetime.now(), key="cs_date_input")
+            sel_d = str(sel_d_obj)
+            
+            filtered_df = cs_df[cs_df['record_date'] == sel_d]
+            if not filtered_df.empty:
+                t_row = filtered_df.iloc[0]
+                q_dict = json.loads(t_row['q_data'])
+                
+                rep_map = [
+                    ["출입통제", "1-1. 지하피트", q_dict.get("1-1","")],
+                    ["출입통제", "1-2. 냉각수조", q_dict.get("1-2","")],
+                    ["출입통제", "1-3. 고가수조", q_dict.get("1-3","")],
+                    ["출입통제", "1-4. 지하수조", q_dict.get("1-4","")],
+                    ["출입통제", "1-5. 정화조 1", q_dict.get("1-5","")],
+                    ["출입통제", "1-6. 정화조 2", q_dict.get("1-6","")],
+                    ["출입통제", "1-7. 정화조 3", q_dict.get("1-7","")],
+                    ["출입통제", "1-8. 침전조", q_dict.get("1-8","")],
+                    ["출입통제", "1-9. 집수조", q_dict.get("1-9","")],
+                    ["출입통제", "1-10. 유수분리조", q_dict.get("1-10","")],
+                    ["출입통제", "1-11. 지하펌프실", q_dict.get("1-11","")],
+                    ["출입통제", "1-12. 기계실 내부피트", q_dict.get("1-12","")],
+                    ["출입통제", "1-13. 엔진룸 챔버", q_dict.get("1-13","")],
+                    ["출입통제", "1-14. 정화조 4", q_dict.get("1-14","")],
+                    ["출입통제", "1-15. 정화조 5", q_dict.get("1-15","")],
+                    ["표지판연락망", "2. 위험표지판 부착", q_dict.get("2","")],
+                    ["표지판연락망", "3. 비상연락망 기재", q_dict.get("3","")],
+                    ["환기장치", "4. 정상작동 여부", q_dict.get("4","")],
+                    ["환기장치", "5. 가동 식별표시", q_dict.get("5","")],
+                    ["환기장치", "6. 전선 피복 상태", q_dict.get("6","")],
+                    ["환기장치", "7. 팬 먼지 상태", q_dict.get("7","")],
+                    ["안전보호구", "8. 정위치 보관 여부", q_dict.get("8","")],
+                    ["측정장치", "9. 경고장치 필증", q_dict.get("9","")],
+                    ["측정장치", "10. 배터리 충분 여부", q_dict.get("10","")],
+                    ["측정장치", "11. 산소 측정치 범위", q_dict.get("11","")],
+                    ["무전기", "12. 배터리 충전", q_dict.get("12","")],
+                    ["무전기", "13. 주파수 일치", q_dict.get("13","")],
+                    ["무전기", "14. 송수신 여부", q_dict.get("14","")],
+                    ["무전기", "15. 음량 충분", q_dict.get("15","")],
+                    ["들것", "16. 파손/끈 상태", q_dict.get("16","")],
+                    ["삼각대", "17. 파손 부위 여부", q_dict.get("17","")],
+                    ["삼각대", "18. 윈치 정상 작동", q_dict.get("18","")],
+                    ["공기호흡기", "19. 산소용량 적정", q_dict.get("19","")],
+                    ["공기호흡기", "20. 안면부 보조마스크", q_dict.get("20","")],
+                    ["공기호흡기", "21. 밸브 정상작동", q_dict.get("21","")],
+                    ["공기호흡기", "22. 연결호스 파손", q_dict.get("22","")],
+                    ["기타", "비고", t_row.get("notes","")]
+                ]
+                r_df = pd.DataFrame(rep_map, columns=["구분", "점검항목", "평가(O/X)"])
+                st.markdown(f"📌 [일자: {sel_d} / 점검자: {t_row.get('inspector','')}]")
+                st.dataframe(r_df, use_container_width=True, height=450)
+                st.download_button(
+                    f"📥 [{sel_d}] 밀폐공간 점검표(CSV) 다운로드",
+                    r_df.to_csv(index=False, encoding='utf-8-sig').encode('utf-8-sig'),
+                    f"ConfinedSpace_Inspection_{sel_d}.csv",
+                    "text/csv",
+                    use_container_width=True
+                )
+            else:
+                st.warning(f"선택하신 날짜({sel_d})에는 점검 기록이 없습니다.")
+            with st.expander("원본 데이터베이스 전체 로그 조회"):
+                st.dataframe(cs_df, use_container_width=True)
+        else:
+            st.info("등록된 기록이 없습니다.")
+
+elif menu == "🧯 소방 펌프 및 밸브 점검":
+    st.markdown("<div class='system-banner'><h3>🧯 소방 펌프실 및 알람밸브 개폐 점검</h3><p>엔진펌프, 전기펌프, 스프링클러 밸브 등 핵심 소방설비를 점검합니다.</p></div>", unsafe_allow_html=True)
+    
+    tab_fp1, tab_fp2 = st.tabs(["📝 점검표 작성", "📂 점검 기록 조회 (리포트다운로드)"])
+
+    with tab_fp1:
+        if fp_scan_param:
+            st.success("📍 [QR 현장 인식 완료] 소방펌프/밸브 점검 모드입니다.")
+
+        pump_category = st.selectbox("📌 점검할 설비를 선택하세요", ["1. 소방 엔진펌프 점검", "2. 소방 전기펌프 점검", "3. 스프링클러 밸브점검"])
+        
+        today_str = str(date.today())
+        today_fp_record = get_fire_pump_today(pump_category, today_str)
+        allow_fp = True
+
+        if today_fp_record:
+            st.markdown(f"<div class='completed-box'>✅ 오늘({today_str}) 해당 설비({pump_category}) 점검이 이미 완료되었습니다. (작성자: {today_fp_record[2]})</div>", unsafe_allow_html=True)
+            allow_fp = st.checkbox("🔄 오늘 점검을 다시 작성(수정)하시겠습니까?", key=f"chk_re_{pump_category}")
+
+        with st.form(f"fp_form_{pump_category}"):
+            c1, c2 = st.columns(2)
+            with c1: fp_date = st.date_input("점검 일자", value=datetime.now())
+            with c2: fp_ins = st.text_input("점검자 성명", disabled=not allow_fp)
+            st.markdown("---")
+
+            q_data = {}
+            if pump_category == "1. 소방 엔진펌프 점검":
+                st.markdown("### 🔥 소방 엔진펌프 점검")
+                fc1, fc2 = st.columns(2)
+                with fc1:
+                    q_data['q1'] = st.radio("2. 제어반 표시등 점등 여부", ["Yes", "No"], disabled=not allow_fp, horizontal=True)
+                    q_data['q2'] = st.radio("3. 연료탱크 경유 적정량", ["Full", "3/4 이상", "1/2 이상", "1/2 이하"], disabled=not allow_fp, horizontal=True)
+                    q_data['q3'] = st.text_input("4. 배터리 #1 충전상태 (Unit: V)", disabled=not allow_fp)
+                    q_data['q4'] = st.text_input("5. 배터리 #2 충전상태 (Unit: V)", disabled=not allow_fp)
+                    q_data['q5'] = st.radio("6. 엔진오일 상태", ["Yes", "No"], disabled=not allow_fp, horizontal=True)
+                    q_data['q6'] = st.radio("7. 배터리 충전기 작동여부", ["Yes", "No"], disabled=not allow_fp, horizontal=True)
+                    q_data['q7'] = st.radio("8. 연료/유류 공급배관 파손여부", ["No", "Yes"], disabled=not allow_fp, horizontal=True)
+                    q_data['q8'] = st.radio("9. 윤활유 유량 (정상확인)", ["Yes", "No"], disabled=not allow_fp, horizontal=True)
+                    q_data['q9'] = st.radio("10. 풀리 벨트상태", ["Yes", "No"], disabled=not allow_fp, horizontal=True)
+                    q_data['q10'] = st.radio("11. 배터리 'A' 작동 여부 (수동작동)", ["Yes", "No"], disabled=not allow_fp, horizontal=True)
+                    q_data['q11'] = st.radio("12. 배터리 'B' 작동 여부 (수동작동)", ["Yes", "No"], disabled=not allow_fp, horizontal=True)
+                with fc2:
+                    q_data['q12'] = st.text_input("13. 기동압력 (Unit: MPa)", disabled=not allow_fp)
+                    q_data['q13'] = st.text_input("14. 펌프 회전속도 (Unit: RPM)", disabled=not allow_fp)
+                    q_data['q14'] = st.radio("15. 펌프 패킹 누수확인", ["Yes", "No"], disabled=not allow_fp, horizontal=True)
+                    q_data['q15'] = st.text_input("16. 엔진펌프 기동 시 쿨링 압력 (Unit: kPa)", disabled=not allow_fp)
+                    q_data['q16'] = st.text_input("17. 엔진펌프 가동 시 오일 압력 (Unit: kPa)", disabled=not allow_fp)
+                    q_data['q17'] = st.text_input("18. 엔진펌프 가동 시 토출 압력 (Unit: Bar)", disabled=not allow_fp)
+                    q_data['q18'] = st.radio("19. 냉각수 온도이상 알람 여부", ["No", "Yes"], disabled=not allow_fp, horizontal=True)
+                    q_data['q19'] = st.radio("20. 수신반 작동알람 여부", ["Yes", "No"], disabled=not allow_fp, horizontal=True)
+                    q_data['q20'] = st.radio("21. 기동 제어 스위치 자동설정 여부", ["Yes", "No"], disabled=not allow_fp, horizontal=True)
+                    q_data['q21'] = st.radio("22. 점검 완료 후 2차측 밸브 개방여부", ["Yes", "No"], disabled=not allow_fp, horizontal=True)
+                    q_data['q22'] = st.text_input("23. 점검 수행시간 (최소 10분 이상)", disabled=not allow_fp)
+
+            elif pump_category == "2. 소방 전기펌프 점검":
+                st.markdown("### ⚡ 소방 전기펌프 점검")
+                ec1, ec2 = st.columns(2)
+                with ec1:
+                    q_data['q1'] = st.radio("2. 수원의 적정수량 유지 (수조 20% 이상)", ["Yes", "No"], disabled=not allow_fp, horizontal=True)
+                    q_data['q2'] = st.text_input("3. 점검 수행시간 (최소 10분 이상)", disabled=not allow_fp)
+                    q_data['q3'] = st.text_input("4. 기동 전 배관압력 (Unit: Bar)", disabled=not allow_fp)
+                    q_data['q4'] = st.radio("5. 압력스위치 작동여부", ["Yes", "No"], disabled=not allow_fp, horizontal=True)
+                    q_data['q5'] = st.radio("6. 주펌프 작동여부", ["Yes", "No"], disabled=not allow_fp, horizontal=True)
+                    q_data['q6'] = st.radio("7. 충압펌프 작동여부", ["Yes", "No"], disabled=not allow_fp, horizontal=True)
+                    q_data['q7'] = st.radio("8. 펌프 작동 후 가동 유지", ["Yes", "No"], disabled=not allow_fp, horizontal=True)
+                    q_data['q8'] = st.text_input("9. 펌프 토출압력 (Unit: Bar)", disabled=not allow_fp)
+                with ec2:
+                    q_data['q9'] = st.radio("10. 릴리프밸브 작동여부", ["Yes", "No"], disabled=not allow_fp, horizontal=True)
+                    q_data['q10'] = st.radio("11. 모터 과열 여부", ["No", "Yes"], disabled=not allow_fp, horizontal=True)
+                    q_data['q11'] = st.radio("12. 펌프실 누수 여부", ["No", "Yes"], disabled=not allow_fp, horizontal=True)
+                    q_data['q12'] = st.radio("13. 배관 누수여부", ["No", "Yes"], disabled=not allow_fp, horizontal=True)
+                    q_data['q13'] = st.radio("14. 펌프실 내부 정리정돈 상태", ["Yes", "No"], disabled=not allow_fp, horizontal=True)
+                    q_data['q14'] = st.radio("15. 펌프실 배수상태 확인", ["Yes", "No"], disabled=not allow_fp, horizontal=True)
+                    q_data['q15'] = st.radio("16. 수신반 가동 표시 알람 여부", ["Yes", "No"], disabled=not allow_fp, horizontal=True)
+                    q_data['q16'] = st.radio("17. 흡입/토출 밸브 개방 가능여부", ["Yes", "No"], disabled=not allow_fp, horizontal=True)
+
+            elif pump_category == "3. 스프링클러 밸브점검":
+                st.markdown("### 🚿 스프링클러 밸브점검 (Open/Shut)")
+                vc1, vc2 = st.columns(2)
+                with vc1:
+                    q_data['q1'] = st.radio("1. P3-V1 주펌프 (Main pump)", ["Open", "Shut"], disabled=not allow_fp, horizontal=True)
+                    q_data['q2'] = st.radio("2. P3-V2 충압펌프 (Jocky pump)", ["Open", "Shut"], disabled=not allow_fp, horizontal=True)
+                    q_data['q3'] = st.radio("3. P3-V3 엔진펌프 (Engine pump)", ["Open", "Shut"], disabled=not allow_fp, horizontal=True)
+                    q_data['q4'] = st.radio("4. P3-V4 1F 스프링클러 (Alarm valve)", ["Open", "Shut"], disabled=not allow_fp, horizontal=True)
+                    q_data['q5'] = st.radio("5. P3-V5 1F 스프링클러 (Pre action VV)", ["Open", "Shut"], disabled=not allow_fp, horizontal=True)
+                with vc2:
+                    q_data['q6'] = st.radio("6. P3-V6 1F 드렌처 설비 (Pre action VV)", ["Open", "Shut"], disabled=not allow_fp, horizontal=True)
+                    q_data['q7'] = st.radio("7. P3-V7 2F 스프링클러 (Alarm valve)", ["Open", "Shut"], disabled=not allow_fp, horizontal=True)
+                    q_data['q8'] = st.radio("8. P3-V8 3F 스프링클러 (Alarm valve)", ["Open", "Shut"], disabled=not allow_fp, horizontal=True)
+                    q_data['q9'] = st.radio("9. P3-V9 3F 스프링클러 (Alarm valve)", ["Open", "Shut"], disabled=not allow_fp, horizontal=True)
+
+            fp_notes = st.text_area("기타 특이사항 (점검간 이상증상 및 조치 필요 사항)", height=80, disabled=not allow_fp)
+
+            if st.form_submit_button(f"💾 {pump_category} 저장", use_container_width=True, disabled=not allow_fp):
+                if not fp_ins.strip():
+                    st.error("점검자 성명을 입력해주세요.")
+                else:
+                    save_fire_pump_log(fp_date, pump_category, fp_ins, q_data, fp_notes)
+                    st.rerun()
+
+    with tab_fp2:
+        st.subheader("📂 소방펌프/밸브 점검 기록 리포트 조회 및 다운로드")
+        fp_df = get_fire_pump_logs()
+        if not fp_df.empty:
+            sc_c1, sc_c2 = st.columns(2)
+            with sc_c1:
+                sel_cat = st.selectbox("출력할 설비 선택", ["1. 소방 엔진펌프 점검", "2. 소방 전기펌프 점검", "3. 스프링클러 밸브점검"])
+            with sc_c2:
+                filtered_cat_df = fp_df[fp_df['category'] == sel_cat]
+                if not filtered_cat_df.empty:
+                    sel_d_obj = st.date_input("📅 조회 및 다운로드할 점검 일자 선택", value=datetime.now(), key="fp_date_input")
+                    sel_d = str(sel_d_obj)
+                else:
+                    st.warning(f"선택하신 '{sel_cat}'의 기록이 없습니다.")
+                    sel_d = None
+
+            if sel_d and not filtered_cat_df.empty:
+                filtered_df = filtered_cat_df[filtered_cat_df['record_date'] == sel_d]
+                if not filtered_df.empty:
+                    t_row = filtered_df.iloc[0]
+                    q_dict = json.loads(t_row['q_data'])
+                    
+                    if sel_cat == "1. 소방 엔진펌프 점검":
+                        rep_map = [
+                            ["제어반 표시등 점등 여부", q_dict.get('q1','')], ["연료탱크 경유 적정량", q_dict.get('q2','')],
+                            ["배터리 #1 충전상태 (V)", q_dict.get('q3','')], ["배터리 #2 충전상태 (V)", q_dict.get('q4','')],
+                            ["엔진오일 상태", q_dict.get('q5','')], ["배터리 충전기 작동여부", q_dict.get('q6','')],
+                            ["연료/유류 배관 파손여부", q_dict.get('q7','')], ["윤활유 유량", q_dict.get('q8','')],
+                            ["쿨링 벨트상태", q_dict.get('q9','')], ["배터리 'A' 작동 여부", q_dict.get('q10','')],
+                            ["배터리 'B' 작동 여부", q_dict.get('q11','')], ["기동압력 (MPa)", q_dict.get('q12','')],
+                            ["펌프 회전속도 (RPM)", q_dict.get('q13','')], ["펌프 패킹 누수확인", q_dict.get('q14','')],
+                            ["기동 시 쿨링 압력 (kPa)", q_dict.get('q15','')], ["기동 시 오일 압력 (kPa)", q_dict.get('q16','')],
+                            ["가동 시 토출 압력 (Bar)", q_dict.get('q17','')], ["냉각수 온도이상 알람", q_dict.get('q18','')],
+                            ["수신반 작동알람 여부", q_dict.get('q19','')], ["기동 제어 스위치 자동설정", q_dict.get('q20','')],
+                            ["2차측 밸브 개방여부", q_dict.get('q21','')], ["점검 수행시간", q_dict.get('q22','')],
+                            ["기타 특이사항", t_row.get('notes','')]
+                        ]
+                    elif sel_cat == "2. 소방 전기펌프 점검":
+                        rep_map = [
+                            ["수원의 적정수량 유지", q_dict.get('q1','')], ["점검 수행시간", q_dict.get('q2','')],
+                            ["기동 전 체절압력 (Bar)", q_dict.get('q3','')], ["압력스위치 작동여부", q_dict.get('q4','')],
+                            ["주펌프 작동여부", q_dict.get('q5','')], ["충압펌프 작동여부", q_dict.get('q6','')],
+                            ["펌프 작동 후 가동 유지", q_dict.get('q7','')], ["펌프 토출압력 (Bar)", q_dict.get('q8','')],
+                            ["릴리프밸브 작동여부", q_dict.get('q9','')], ["모터 과열 여부", q_dict.get('q10','')],
+                            ["펌프실 누수 여부", q_dict.get('q11','')], ["배관 누수여부", q_dict.get('q12','')],
+                            ["펌프실 내부 정리정돈", q_dict.get('q13','')], ["펌프실 배수상태", q_dict.get('q14','')],
+                            ["수신반 가동 표시 알람", q_dict.get('q15','')], ["흡입/토출 밸브 개방 여부", q_dict.get('q16','')],
+                            ["기타 특이사항", t_row.get('notes','')]
+                        ]
+                    else:
+                        rep_map = [
+                            ["P3-V1 주펌프", q_dict.get('q1','')], ["P3-V2 충압펌프", q_dict.get('q2','')],
+                            ["P3-V3 엔진펌프", q_dict.get('q3','')], ["P3-V4 1F 스프링클러(Alarm)", q_dict.get('q4','')],
+                            ["P3-V5 1F 스프링클러(Pre action)", q_dict.get('q5','')], ["P3-V6 1F 드렌처 설비", q_dict.get('q6','')],
+                            ["P3-V7 2F 스프링클러(Alarm)", q_dict.get('q7','')], ["P3-V8 3F 스프링클러(Alarm)", q_dict.get('q8','')],
+                            ["P3-V9 3F 스프링클러(Alarm)", q_dict.get('q9','')], ["기타 특이사항", t_row.get('notes','')]
+                        ]
+
+                    r_df = pd.DataFrame(rep_map, columns=["점검 항목", "점검 결과"])
+                    st.markdown(f"📌 [{sel_cat}] 일자: {sel_d} / 점검자: {t_row.get('inspector','')}]")
+                    st.dataframe(r_df, use_container_width=True, height=450)
+                    st.download_button(
+                        f"📥 [{sel_d}] {sel_cat} 점검표 다운로드",
+                        r_df.to_csv(index=False, encoding='utf-8-sig').encode('utf-8-sig'),
+                        f"Fire_Inspection_{sel_d}.csv",
+                        "text/csv",
+                        use_container_width=True
+                    )
+                else:
+                    st.warning(f"선택하신 날짜({sel_d})에는 '{sel_cat}' 점검 기록이 없습니다.")
+            with st.expander("원본 가로형 데이터베이스 로그 전체 보기"):
+                st.dataframe(fp_df, use_container_width=True)
+        else:
+            st.info("등록된 기록이 없습니다.")
