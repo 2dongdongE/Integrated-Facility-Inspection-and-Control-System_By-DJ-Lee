@@ -11,7 +11,7 @@ import os
 import json
 
 # ----------------------------------------------------
-# 1. 페이지 레이아웃 및 스타일
+# 1. 페이지 레이아웃 및 스타일 (사이드바 스크롤바 적용)
 # ----------------------------------------------------
 st.set_page_config(
     page_title="전사 시설물 에너지 관리 현황",
@@ -22,6 +22,13 @@ st.set_page_config(
 
 st.markdown("""
 <style>
+    [data-testid="stSidebar"] {
+        overflow-y: auto !important;
+    }
+    [data-testid="stSidebar"] > div:first-child {
+        overflow-y: auto !important;
+        height: 100%;
+    }
     [data-testid="InputInstructions"],
     div[data-testid="InputInstructions"] span {
         display: none !important;
@@ -68,10 +75,30 @@ st.markdown("""
         padding: 16px 20px;
         margin-bottom: 18px;
     }
+    .tracker-card {
+        background-color: var(--secondary-background-color);
+        border: 1px solid var(--border-color, rgba(128, 128, 128, 0.2));
+        border-radius: 8px;
+        padding: 14px 16px;
+        height: 100%;
+    }
+    .tracker-title {
+        font-size: 14px;
+        font-weight: 800;
+        margin-bottom: 8px;
+        color: var(--text-color);
+        display: flex;
+        align-items: center;
+        gap: 6px;
+    }
+    .tracker-item {
+        font-size: 12px;
+        line-height: 1.8;
+        color: var(--text-color);
+    }
 </style>
 """, unsafe_allow_html=True)
 
-# --- 새로고침 후에도 구글 시트 결과 메시지 띄우기 ---
 if "sheet_alert" in st.session_state:
     alert_type, alert_msg = st.session_state.pop("sheet_alert")
     if alert_type == "error":
@@ -87,8 +114,6 @@ if "sheet_alert" in st.session_state:
 UTILITY_ORDER = ["상수도(메인)", "상수도(식당)", "지하수", "정수", "전기사용량", "LPG가스"]
 UTILITY_COLORS = ['#2563eb', '#60a5fa', '#f59e0b', '#10b981', '#ef4444', '#9467bd']
 WATER_UTILITIES = ["상수도(메인)", "상수도(식당)", "지하수", "정수"]
-
-# [팁] 아래 따옴표 안에 현재 웹사이트 주소를 적어두시면 기본값으로 계속 유지됩니다!
 DEFAULT_HOST_BASE_URL = "https://integrated-facility-inspection-and-control-system-by-dj-lee.streamlit.app"
 
 db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "facility.db")
@@ -104,7 +129,6 @@ def get_utility_unit(u_type):
     else:
         return "Ton"
 
-# --- 환경설정 영구 저장 및 불러오기 함수 ---
 def get_system_config(key, default_val=""):
     try:
         conn = sqlite3.connect(db_path)
@@ -125,7 +149,7 @@ def set_system_config(key, val):
     except Exception:
         pass
 
-# --- 구글 시트 연동 핵심 함수 (저장, 수정, 삭제, 전체 복원) ---
+# --- 구글 시트 연동 핵심 함수 ---
 def get_gspread_client():
     try:
         import gspread
@@ -207,7 +231,6 @@ def clear_sheet_records(sheet_name: str):
     except Exception as e:
         st.session_state["sheet_alert"] = ("error", f"🚨 [구글 시트 전체 삭제 실패]: {e}")
 
-# --- 구글 시트 ➔ 시스템 DB 원클릭 전체 복원 함수 ---
 def restore_data_from_sheets():
     gc = get_gspread_client()
     if not gc:
@@ -217,7 +240,6 @@ def restore_data_from_sheets():
         conn = sqlite3.connect(db_path)
         cursor = conn.cursor()
 
-        # 1. 실제 소화기 자산
         try:
             ws = sh.worksheet("extinguishers")
             rows = ws.get_all_values()[1:]
@@ -226,7 +248,6 @@ def restore_data_from_sheets():
                     cursor.execute("INSERT OR REPLACE INTO extinguishers (ext_id, location) VALUES (?, ?)", (r[0].strip(), r[1].strip()))
         except Exception: pass
 
-        # 2. 소화기 점검 이력
         try:
             ws = sh.worksheet("inspection_history")
             rows = ws.get_all_values()[1:]
@@ -238,7 +259,6 @@ def restore_data_from_sheets():
                         (int(r[0]), r[1], r[2], r[3], r[4], r[5], int(r[6]) if r[6].isdigit() else 0))
         except Exception: pass
 
-        # 3. 유틸리티 검침 데이터
         try:
             ws = sh.worksheet("utility_usage")
             rows = ws.get_all_values()[1:]
@@ -250,7 +270,6 @@ def restore_data_from_sheets():
                         (int(r[0]), r[1], r[2], float(r[3]) if r[3] else 0.0, r[4], r[5]))
         except Exception: pass
 
-        # 4. 일일 설비 점검 일지
         try:
             ws = sh.worksheet("daily_exact_inspection")
             header = ws.row_values(1)
@@ -266,7 +285,6 @@ def restore_data_from_sheets():
                         cursor.execute(f"INSERT OR REPLACE INTO daily_exact_inspection ({col_names}) VALUES ({placeholders})", vals[:len(cols)])
         except Exception: pass
 
-        # 5. 밀폐공간 점검표
         try:
             ws = sh.worksheet("confined_space_inspection")
             rows = ws.get_all_values()[1:]
@@ -278,7 +296,6 @@ def restore_data_from_sheets():
                         (int(r[0]), r[1], r[2], r[3], r[4], r[5]))
         except Exception: pass
 
-        # 6. 소방펌프 및 밸브 점검표
         try:
             ws = sh.worksheet("fire_pump_inspection")
             rows = ws.get_all_values()[1:]
@@ -290,7 +307,6 @@ def restore_data_from_sheets():
                         (int(r[0]), r[1], r[2], r[3], r[4], r[5], r[6]))
         except Exception: pass
 
-        # 7. 관리자 계정 명부
         try:
             ws = sh.worksheet("admin_users")
             rows = ws.get_all_values()[1:]
@@ -315,7 +331,6 @@ def init_db():
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
         
-    # 설정값 영구 보관용 테이블
     cursor.execute('''CREATE TABLE IF NOT EXISTS system_config (
         key TEXT PRIMARY KEY,
         value TEXT
@@ -396,14 +411,12 @@ def init_db():
         created_at TEXT
     )''')
 
-    # 마스터 관리자 기본 등록
     cursor.execute("SELECT COUNT(*) FROM admin_users WHERE username = 'dolee'")
     if cursor.fetchone()[0] == 0:
         cursor.execute("INSERT INTO admin_users (username, password_hash, name, dept, role, approved, created_at) VALUES ('dolee', ?, '마스터 관리자', '', 'master', 1, ?)", 
                        (hash_pw("2051"), datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
         conn.commit()
 
-    # 실제 현장 소화기 181대 전체 정식 등록 (100% 안전 유지)
     cursor.execute("SELECT COUNT(*) FROM extinguishers")
     if cursor.fetchone()[0] < 181:
         cursor.execute("DELETE FROM extinguishers")
@@ -450,7 +463,6 @@ def init_db():
             cursor.execute('INSERT OR IGNORE INTO extinguishers (ext_id, location) VALUES (?, ?)', (ext_id_val, location))
         conn.commit()
 
-    # [핵심] 기존 DB에 박혀있던 365일 치 가짜 검침 데이터('정상 검침', '정기 검침' 등) 남김없이 완전 삭제
     cursor.execute("DELETE FROM utility_usage WHERE notes LIKE '%검침%'")
     cursor.execute("DELETE FROM sqlite_sequence WHERE name='utility_usage'")
     conn.commit()
@@ -783,56 +795,74 @@ def check_factory_anomalies(u_df):
     alerts = []
     if u_df.empty:
         return alerts
+    
     for u_type in UTILITY_ORDER:
         sub = u_df[u_df['유틸리티종류'] == u_type].sort_values(['기록일자', 'id']).copy()
         if len(sub) < 2:
             continue
+            
         sub['date_dt'] = pd.to_datetime(sub['기록일자'])
         sub['days_diff'] = (sub['date_dt'] - sub['date_dt'].shift(1)).dt.days.fillna(1).clip(lower=1)
         sub['daily_usage'] = ((sub['지침값'] - sub['지침값'].shift(1)).clip(lower=0) / sub['days_diff']).round(1)
+        sub['dayofweek'] = sub['date_dt'].dt.dayofweek
         
         latest = sub.iloc[-1]
-        valid_past = sub.iloc[:-1]['daily_usage'].dropna()
-        if len(valid_past) < 1:
+        past_data = sub.iloc[:-1].dropna(subset=['daily_usage'])
+        
+        if past_data.empty:
             continue
-        avg_d = valid_past.mean()
+            
+        weekday_past = past_data[past_data['dayofweek'] < 5]
+        if not weekday_past.empty:
+            recent_weekday_data = weekday_past.tail(5)['daily_usage']
+            avg_weekday = recent_weekday_data.mean()
+        else:
+            avg_weekday = past_data.tail(5)['daily_usage'].mean()
+            
         cur_d = latest['daily_usage']
         d_diff = int(latest['days_diff'])
+        diff_amount = cur_d - avg_weekday
 
         if u_type in WATER_UTILITIES:
-            if avg_d > 0 and cur_d >= (avg_d * 1.25) and (cur_d - avg_d) >= 4.0:
-                alerts.append({
-                    'id': f"leak_{u_type}", 
-                    'level': 'error', 
-                    'title': f'🚨 [누수 의심 경보] {u_type}', 
-                    'body': f"• 검침 일자: {latest['기록일자']}\n\n• 금일 사용량(1일 환산): {cur_d:,.0f} Ton (평소 평일 평균 {avg_d:,.0f} Ton)\n\n• 분석 결과: 평소 대비 {cur_d/avg_d:.1f}배 급증"
-                })
-                continue
+            if latest['dayofweek'] < 5 and d_diff == 1:
+                if avg_weekday > 0 and cur_d >= (avg_weekday * 1.30) and diff_amount >= (avg_weekday * 0.20):
+                    alerts.append({
+                        'id': f"leak_{u_type}", 
+                        'level': 'error', 
+                        'title': f'🚨 [평일 누수 의심 경보] {u_type}', 
+                        'body': f"• 검침 일자: {latest['기록일자']}\n\n• 금일 사용량: {cur_d:,.1f} Ton (평소 평일 일평균 {avg_weekday:,.1f} Ton)\n\n• 분석 결과: 평일 평균 대비 {((cur_d-avg_weekday)/avg_weekday*100):.1f}% 폭증 (+{diff_amount:,.1f} Ton)"
+                    })
+                    continue
+
+            if d_diff >= 2 or latest['dayofweek'] >= 5:
+                if avg_weekday > 0 and cur_d >= (avg_weekday * 0.40):
+                    alerts.append({
+                        'id': f"weekend_{u_type}", 
+                        'level': 'warning', 
+                        'title': f'🔍 [주말/휴무 기저 누수 감지] {u_type}', 
+                        'body': f"• 비가동 기간 일평균: {cur_d:,.1f} Ton (평소 평일 일평균 {avg_weekday:,.1f} Ton)\n\n• 분석 결과: 공장 비가동/주말 기간 동안 평일 사용량의 {cur_d/avg_weekday*100:.1f}% 수준으로 물이 계속 소모됨"
+                    })
+                    continue
+
             if len(sub) >= 4:
                 r3 = sub.iloc[-3:]['daily_usage'].tolist()
-                if r3[0] < r3[1] < r3[2] and (((r3[2] - r3[0]) / r3[0] * 100) >= 15.0) and ((r3[2] - r3[0]) >= 2.0):
+                if r3[0] < r3[1] < r3[2] and (((r3[2] - r3[0]) / r3[0] * 100) >= 15.0):
                     alerts.append({
                         'id': f"micro_{u_type}", 
                         'level': 'warning', 
                         'title': f'⚠️ [미세 누수 주의] {u_type}', 
-                        'body': f"• 최근 사용량 추이: {r3[0]:,.0f} ➔ {r3[1]:,.0f} ➔ {r3[2]:,.0f} Ton\n\n• 분석 결과: 3회 연속 점진적 증가 감지"
+                        'body': f"• 최근 사용량 추이: {r3[0]:,.1f} ➔ {r3[1]:,.1f} ➔ {r3[2]:,.1f} Ton\n\n• 분석 결과: 3회 연속 점진적 증가 감지 (총 증가율 {((r3[2]-r3[0])/r3[0]*100):.1f}%)"
                     })
-            if d_diff >= 3 and cur_d >= (avg_d * 0.4) and cur_d >= 4.0:
-                alerts.append({
-                    'id': f"weekend_{u_type}", 
-                    'level': 'warning', 
-                    'title': f'🔍 [주말 기저 누수 의심] {u_type}', 
-                    'body': f"• 비가동 기간 총 소모량: {(cur_d * d_diff):,.0f} Ton (일평균 {cur_d:,.0f} Ton)\n\n• 분석 결과: 공장 휴무 기간 동안 평일의 40% 이상 물이 지속 소모됨"
-                })
         else:
-            if avg_d > 0 and cur_d >= (avg_d * 1.8) and (cur_d - avg_d) >= 10.0:
+            if avg_weekday > 0 and cur_d >= (avg_weekday * 1.50):
                 unit = 'kWh' if '전기' in u_type else '㎥'
                 alerts.append({
                     'id': f"over_{u_type}", 
                     'level': 'error', 
                     'title': f'🚨 [과다 소비 경고] {u_type}', 
-                    'body': f"• 금일 사용량: {cur_d:,.1f} {unit} (평소 평균 {avg_d:,.1f} {unit})\n\n• 분석 결과: 평소 대비 {cur_d/avg_d:.1f}배 급증"
+                    'body': f"• 금일 사용량: {cur_d:,.1f} {unit} (평소 평일 일평균 {avg_weekday:,.1f} {unit})\n\n• 분석 결과: 평일 평균 대비 {((cur_d-avg_weekday)/avg_weekday*100):.1f}% 급증"
                 })
+                
     return alerts
 
 init_db()
@@ -842,7 +872,6 @@ init_db()
 # ----------------------------------------------------
 if 'auth_user' not in st.session_state: st.session_state['auth_user'] = None
 
-# [핵심] 마지막으로 DB에 저장되었던 고정 URL을 불러와 세션에 유지!
 saved_url = get_system_config("host_url", DEFAULT_HOST_BASE_URL)
 if 'custom_host_url' not in st.session_state: 
     st.session_state['custom_host_url'] = saved_url
@@ -914,7 +943,6 @@ else:
     st.sidebar.markdown("---")
     st.sidebar.subheader("⚙️ 관리자 도구")
 
-    # [복원 기능] 구글 시트 원클릭 전체 데이터 복원 기능
     with st.sidebar.expander("🔄 구글 시트 데이터 복원", expanded=False):
         st.caption("서버 초기화 시 구글 시트에 누적된 모든 데이터를 앱 내부로 1초 만에 복구합니다.")
         if st.button("구글 시트 데이터 전체 복원 실행", use_container_width=True, key="btn_restore_all_from_sheets"):
@@ -929,7 +957,6 @@ else:
     if is_master:
         with st.sidebar.expander("🌐 도메인(URL) 설정", expanded=False):
             i_url = st.text_input("접속 주소", value=active_host_url)
-            # [핵심] 주소를 변경하면 세션뿐 아니라 DB에도 영구 저장하여 새로고침 시 리셋 방지!
             if i_url.strip() and i_url.strip().rstrip('/') != active_host_url:
                 new_url = i_url.strip().rstrip('/')
                 st.session_state['custom_host_url'] = new_url
@@ -1078,130 +1105,242 @@ if menu == "📊 통합 종합 대시보드":
         </div>
     """, unsafe_allow_html=True)
 
-    st.markdown("""
-    <style>
-    .dash-kpi {
-        background: var(--secondary-background-color);
-        border: 1px solid var(--border-color, rgba(128,128,128,0.2));
-        border-radius: 10px;
-        padding: 14px 18px;
-        height: 100%;
-    }
-    .dash-kpi .lbl { font-size: 12px; font-weight: 700; color: var(--text-color); opacity: 0.65; margin-bottom: 6px; }
-    .dash-kpi .val { font-size: 26px; font-weight: 800; line-height: 1.15; }
-    .dash-kpi .sub { font-size: 12px; margin-top: 6px; opacity: 0.85; color: var(--text-color); }
-    .kpi-bar { height: 6px; background: rgba(128,128,128,0.18); border-radius: 3px; margin-top: 10px; overflow: hidden; }
-    .kpi-bar-fill { height: 100%; border-radius: 3px; }
-    .dash-section-title { font-size: 17px; font-weight: 800; color: var(--text-color); margin: 4px 0 2px 0; }
-    .dash-section-desc { font-size: 12px; color: var(--text-color); opacity: 0.65; margin-bottom: 10px; }
-    </style>
-    """, unsafe_allow_html=True)
+    today = date.today()
+    cur_m = today.month
+    today_str = str(today)
+    start_of_week = today - timedelta(days=today.weekday())  # 이번 주 월요일
+    start_of_month_str = today.strftime("%Y-%m-01")
 
-    def dash_kpi_card(label, value, sub="", accent="#2563eb", bar_pct=None):
-        bar = f'<div class="kpi-bar"><div class="kpi-bar-fill" style="width:{min(max(bar_pct,0),100):.0f}%;background:{accent};"></div></div>' if bar_pct is not None else ""
-        sub_html = f'<div class="sub">{sub}</div>' if sub else ""
-        return (f'<div class="dash-kpi" style="border-top:3px solid {accent};">'
-                f'<div class="lbl">{label}</div><div class="val" style="color:{accent};">{value}</div>{sub_html}{bar}</div>')
-
+    # --- 1. 데이터 수집 및 상태 산출 ---
     ext_df = get_all_extinguishers()
     u_df = get_utility_df()
     history_df = get_history_with_id()
     unresolved_df = get_unresolved_issues()
     all_anomalies = check_factory_anomalies(u_df)
-    
     anomalies = [a for a in all_anomalies if a['id'] not in st.session_state['acknowledged_alerts']]
 
-    cur_m = datetime.now().month
+    daily_logs_df = get_exact_daily_logs()
+    cs_logs_df = get_confined_space_logs()
+    fp_logs_df = get_fire_pump_logs()
+
+    # (1) 일일 점검 현황
+    rec_daily_today = get_daily_inspection_today(today_str)
+    daily_checked = rec_daily_today is not None
+    u_today_cnt = len(u_df[u_df['기록일자'] == today_str]['유틸리티종류'].unique()) if not u_df.empty else 0
+
+    # (2) 주간 점검 현황 (소방 엔진펌프: 1회/주)
+    engine_weekly_df = fp_logs_df[(fp_logs_df['category'] == '1. 소방 엔진펌프 점검') & (fp_logs_df['record_date'] >= str(start_of_week))] if not fp_logs_df.empty else pd.DataFrame()
+    engine_checked = not engine_weekly_df.empty
+    latest_engine = fp_logs_df[fp_logs_df['category'] == '1. 소방 엔진펌프 점검'].iloc[0] if not fp_logs_df.empty and (fp_logs_df['category'] == '1. 소방 엔진펌프 점검').any() else None
+
+    # (3) 월간 점검 현황 (1회/월)
+    # 소화기 점검률
     ins_m = len(history_df[pd.to_datetime(history_df['점검시간'], errors='coerce').dt.month == cur_m]['소화기ID'].dropna().unique()) if not history_df.empty else 0
     c_rate = (ins_m / len(ext_df) * 100) if not ext_df.empty else 0
 
-    k1, k2, k3, k4 = st.columns(4)
-    with k1:
-        st.markdown(dash_kpi_card("총 등록 소화기", f"{len(ext_df):,} 대", "전사 방재 설비 자산"), unsafe_allow_html=True)
-    with k2:
-        st.markdown(dash_kpi_card(f"{cur_m}월 소화기 점검률", f"{c_rate:.1f}%", f"{ins_m} / {len(ext_df)} 대 점검 완료", accent="#10b981", bar_pct=c_rate), unsafe_allow_html=True)
-    with k3:
-        st.markdown(dash_kpi_card("즉시 조치 필요", f"{len(unresolved_df):,} 건", "미조치 설비 결함" if len(unresolved_df) > 0 else "모든 설비 정상", accent="#ef4444" if len(unresolved_df) > 0 else "#10b981"), unsafe_allow_html=True)
-    with k4:
-        st.markdown(dash_kpi_card("누수/이상 경보", f"{len(anomalies):,} 건", "소비 패턴 이상 감지" if anomalies else "이상 없음", accent="#ef4444" if anomalies else "#10b981"), unsafe_allow_html=True)
+    # 소방 전기펌프
+    elec_monthly_df = fp_logs_df[(fp_logs_df['category'] == '2. 소방 전기펌프 점검') & (fp_logs_df['record_date'] >= start_of_month_str)] if not fp_logs_df.empty else pd.DataFrame()
+    elec_checked = not elec_monthly_df.empty
 
-    st.markdown("<div style='height:14px;'></div>", unsafe_allow_html=True)
+    # 스프링클러 밸브
+    valve_monthly_df = fp_logs_df[(fp_logs_df['category'] == '3. 스프링클러 밸브점검') & (fp_logs_df['record_date'] >= start_of_month_str)] if not fp_logs_df.empty else pd.DataFrame()
+    valve_checked = not valve_monthly_df.empty
+    latest_valve = fp_logs_df[fp_logs_df['category'] == '3. 스프링클러 밸브점검'].iloc[0] if not fp_logs_df.empty and (fp_logs_df['category'] == '3. 스프링클러 밸브점검').any() else None
 
-    if u_df.empty:
-        st.info("등록된 검침 데이터가 없습니다. [유틸리티 사용량 관리] 메뉴에서 실제 계량기 지침값을 등록하시면 대시보드 통계가 활성화됩니다.")
+    # 밀폐공간 점검
+    cs_monthly_df = cs_logs_df[cs_logs_df['record_date'] >= start_of_month_str] if not cs_logs_df.empty else pd.DataFrame()
+    cs_checked = not cs_monthly_df.empty
+    latest_cs = cs_logs_df.iloc[0] if not cs_logs_df.empty else None
+
+    # --- 2. 스마트 긴급 비상 안전 경보 감지 (밸브 Shut, 배터리 방전, 밀폐 결함) ---
+    critical_alerts = []
+
+    # A. 스프링클러 밸브 Shut 검사
+    if latest_valve is not None:
+        try:
+            v_dict = json.loads(latest_valve['q_data'])
+            shut_valves = [k for k, v in v_dict.items() if v == 'Shut']
+            if shut_valves:
+                critical_alerts.append(f"🚨 [비상] 스프링클러 차단 밸브 {len(shut_valves)}개 잠김(Shut) 감지! (화재 시 살수 불가 위험 - 즉시 개방 조치)")
+        except Exception: pass
+
+    # B. 소방 엔진펌프 배터리 / 연료 검사
+    if latest_engine is not None:
+        try:
+            e_dict = json.loads(latest_engine['q_data'])
+            if e_dict.get('q2') == '1/2 이하':
+                critical_alerts.append("⚠️ [위험] 소방 엔진펌프 경유 잔량 부족 (1/2 이하) - 즉시 주유 필요")
+            b1 = e_dict.get('q3', '').strip()
+            if b1.replace('.','',1).isdigit() and float(b1) < 24.0:
+                critical_alerts.append(f"⚠️ [주의] 소방 엔진펌프 배터리#1 전압 저하 ({b1}V) - 기동 불능 위험")
+        except Exception: pass
+
+    # C. 밀폐공간 안전 결함 검사
+    if latest_cs is not None:
+        try:
+            cs_dict = json.loads(latest_cs['q_data'])
+            x_items = [k for k, v in cs_dict.items() if v == 'X']
+            if x_items:
+                critical_alerts.append(f"⚠️ [주의] 밀폐공간 안전장비 부적합(X) {len(x_items)}건 발견 (환기/측정기/호흡기 점검 필요)")
+        except Exception: pass
+
+    # 비상 배너 출력 (경보가 있을 때만 강조)
+    if critical_alerts:
+        for ca in critical_alerts:
+            st.error(ca)
     else:
-        uf = u_df.copy()
-        uf['parsed'] = pd.to_datetime(uf['기록일자'], errors='coerce')
-        uf = uf.sort_values(['유틸리티종류', 'parsed', 'id'])
-        uf['구간사용량'] = (uf['지침값'] - uf.groupby('유틸리티종류')['지침값'].shift(1)).clip(lower=0)
+        st.markdown("<div style='background-color:rgba(34,197,94,0.12);border-left:4px solid #22c55e;padding:10px 16px;border-radius:4px;font-size:13px;font-weight:700;color:#22c55e;margin-bottom:14px;'>✨ 모든 주요 소방 방재설비 및 안전 점검이 정상 범위 내에 있습니다.</div>", unsafe_allow_html=True)
+
+    # --- 3. [1단] 점검 주기별 이행 트래커 (일간 / 주간 / 월간) ---
+    st.markdown("<div style='font-size:16px;font-weight:800;margin:10px 0 8px 0;'>📅 점검 주기별 이행 현황</div>", unsafe_allow_html=True)
+    tr_col1, tr_col2, tr_col3 = st.columns(3)
+
+    with tr_col1:
+        st.markdown(f"""
+        <div class='tracker-card' style='border-top:3px solid #2563eb;'>
+            <div class='tracker-title'>☀️ 일일 점검 (Daily)</div>
+            <div class='tracker-item'>• 설비실 일일점검: <b>{'🟢 오늘 완료 (' + rec_daily_today[2] + ')' if daily_checked else '🔴 오늘 미실시'}</b></div>
+            <div class='tracker-item'>• 6대 에너지 검침: <b>{'🟢 6/6종 완료' if u_today_cnt >= 6 else f'🟡 {u_today_cnt}/6종 등록됨'}</b></div>
+            <div class='tracker-item' style='color:#64748b;font-size:11px;'>※ 매일 순찰 및 당일 1회 이상 필수</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    with tr_col2:
+        d_until_sun = 6 - today.weekday()
+        st.markdown(f"""
+        <div class='tracker-card' style='border-top:3px solid #f59e0b;'>
+            <div class='tracker-title'>🗓️ 주간 점검 (Weekly · 1회/주)</div>
+            <div class='tracker-item'>• 소방 엔진펌프: <b>{'🟢 이번 주 완료' if engine_checked else f'🟡 이번 주 미실시 (D-{d_until_sun}일)'}</b></div>
+            <div class='tracker-item'>• 최근 기동 시험: {latest_engine['record_date'] if latest_engine is not None else '기록 없음'}</div>
+            <div class='tracker-item' style='color:#64748b;font-size:11px;'>※ 화재 비상용 엔진펌프 매주 기동시험</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    with tr_col3:
+        st.markdown(f"""
+        <div class='tracker-card' style='border-top:3px solid #10b981;'>
+            <div class='tracker-title'>🌕 월간 점검 (Monthly · 1회/월)</div>
+            <div class='tracker-item'>• 소화기 181대 점검률: <b>{c_rate:.1f}% ({ins_m}/181대)</b></div>
+            <div class='tracker-item'>• 소방 전기펌프: <b>{'🟢 11월 완료' if elec_checked else '🟡 11월 미실시'}</b> | 스프링클러: <b>{'🟢 완료' if valve_checked else '🟡 미실시'}</b></div>
+            <div class='tracker-item'>• 밀폐공간 안전점검: <b>{'🟢 11월 완료' if cs_checked else '🟡 11월 미실시'}</b></div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    st.markdown("<div style='height:16px;'></div>", unsafe_allow_html=True)
+
+    # --- 4. [2단 좌측: 컴프레셔 전일 대비 실부하율 & 수조 수위 분석] vs [우측: 유틸리티 기간 사용량] ---
+    cp_col, ut_col = st.columns([1, 1])
+
+    with cp_col:
+        st.markdown("<div style='font-size:15px;font-weight:800;margin-bottom:6px;'>⚙️ 컴프레셔 일일 실부하율 및 설비 지표</div>", unsafe_allow_html=True)
+        with st.container(border=True):
+            if len(daily_logs_df) >= 2:
+                row_cur = daily_logs_df.iloc[0]
+                row_prev = daily_logs_df.iloc[1]
+                
+                try:
+                    dt_c = datetime.strptime(str(row_cur['record_date']), "%Y-%m-%d")
+                    dt_p = datetime.strptime(str(row_prev['record_date']), "%Y-%m-%d")
+                    d_interval = max((dt_c - dt_p).days, 1)
+                except Exception:
+                    d_interval = 1
+                    
+                total_hours = d_interval * 24.0
+
+                def calc_load_ratio(k_cur_load, k_prev_load):
+                    try:
+                        v_cur = float(str(row_cur.get(k_cur_load, '0')).replace(',', ''))
+                        v_prev = float(str(row_prev.get(k_prev_load, '0')).replace(',', ''))
+                        delta_load = max(v_cur - v_prev, 0.0)
+                        ratio = (delta_load / total_hours) * 100.0
+                        return min(max(ratio, 0.0), 100.0), delta_load
+                    except Exception:
+                        return None, 0.0
+
+                r1, d_l1 = calc_load_ratio('load_time_1', 'load_time_1')
+                r2, d_l2 = calc_load_ratio('load_time_2', 'load_time_2')
+                r3, d_l3 = calc_load_ratio('load_time_3', 'load_time_3')
+                rtx, d_ltx = calc_load_ratio('tx_load_t', 'tx_load_t')
+
+                st.caption(f"기준: 최근 2회 점검 간격({d_interval}일 / 총 {total_hours:.0f}시간 기준 전일 대비 실가동 부하율)")
+                
+                c_m1, c_m2, c_m3 = st.columns(3)
+                with c_m1:
+                    v_str = f"{r1:.1f}%" if r1 is not None else "데이터 미입력"
+                    color = "#10b981" if (r1 or 0) >= 40 else "#f59e0b"
+                    st.markdown(f"**AL-150 (#1호기)**<br><span style='font-size:20px;font-weight:800;color:{color};'>{v_str}</span><br><span style='font-size:11px;color:#64748b;'>로딩 {d_l1:.1f}시간</span>", unsafe_allow_html=True)
+                with c_m2:
+                    v_str = f"{r2:.1f}%" if r2 is not None else "데이터 미입력"
+                    color = "#10b981" if (r2 or 0) >= 40 else "#f59e0b"
+                    st.markdown(f"**AL-150 (#2호기)**<br><span style='font-size:20px;font-weight:800;color:{color};'>{v_str}</span><br><span style='font-size:11px;color:#64748b;'>로딩 {d_l2:.1f}시간</span>", unsafe_allow_html=True)
+                with c_m3:
+                    v_str = f"{rtx:.1f}%" if rtx is not None else "데이터 미입력"
+                    color = "#2563eb" if (rtx or 0) >= 40 else "#f59e0b"
+                    st.markdown(f"**TX-280 (터보)**<br><span style='font-size:20px;font-weight:800;color:{color};'>{v_str}</span><br><span style='font-size:11px;color:#64748b;'>로딩 {d_ltx:.1f}시간</span>", unsafe_allow_html=True)
+
+                st.markdown("<div style='height:8px;'></div>", unsafe_allow_html=True)
+                st.markdown(f"""
+                <div style='font-size:12px;background:rgba(128,128,128,0.1);padding:8px 12px;border-radius:6px;'>
+                    <b>💧 주요 수조 수위 및 기온 ({row_cur.get('record_date','')})</b><br>
+                    • 지하수조: <b>{row_cur.get('w_u_lvl','-')}</b> (기준 55%↑) | 정수조: <b>{row_cur.get('w_p_lvl','-')}</b> (기준 40%↑)<br>
+                    • 기계실 실내온도: <b>{row_cur.get('temp_mach','-')}℃</b> (외기: {row_cur.get('temp_outside','-')}℃)
+                </div>
+                """, unsafe_allow_html=True)
+            else:
+                st.info("💡 일일 점검 일지가 2회 이상 등록되면 전일 대비 실가동 부하율(Loading Ratio %)이 자동 계산됩니다.")
+
+    with ut_col:
+        st.markdown("<div style='font-size:15px;font-weight:800;margin-bottom:6px;'>💧 유틸리티 기간 사용량 비교</div>", unsafe_allow_html=True)
+        with st.container(border=True):
+            if u_df.empty:
+                st.info("등록된 검침 데이터가 없습니다. [유틸리티 사용량 관리] 메뉴에서 지침값을 입력해주세요.")
+            else:
+                uf = u_df.copy()
+                uf['parsed'] = pd.to_datetime(uf['기록일자'], errors='coerce')
+                uf = uf.sort_values(['유틸리티종류', 'parsed', 'id'])
+                uf['구간사용량'] = (uf['지침값'] - uf.groupby('유틸리티종류')['지침값'].shift(1)).clip(lower=0)
+
+                d1c, d2c = st.columns(2)
+                with d1c:
+                    date1 = st.date_input("기준일 1", value=today - timedelta(days=30), key="d1_kpi")
+                with d2c:
+                    date2 = st.date_input("기준일 2", value=today, key="d2_kpi")
+
+                lo, hi = (date1, date2) if date1 <= date2 else (date2, date1)
+                cmp_rows = []
+                for u_type in UTILITY_ORDER:
+                    sub = uf[uf['유틸리티종류'] == u_type]
+                    m1 = sub[sub['parsed'] <= pd.Timestamp(lo)]
+                    m2 = sub[sub['parsed'] <= pd.Timestamp(hi)]
+                    if m1.empty or m2.empty: continue
+                    v1 = float(m1.iloc[-1]['지침값'])
+                    v2 = float(m2.iloc[-1]['지침값'])
+                    cmp_rows.append({
+                        '유틸리티': u_type, '사용량': round(max(v2 - v1, 0.0), 1),
+                        '단위': get_utility_unit(u_type)
+                    })
+                cmp_df = pd.DataFrame(cmp_rows)
+
+                if cmp_df.empty:
+                    st.warning("선택한 기간에 비교할 검침 기록이 없습니다.")
+                else:
+                    cmp_df['라벨'] = cmp_df.apply(lambda r: f"{r['사용량']:,.1f} {r['단위']}", axis=1)
+                    mini_bar = alt.Chart(cmp_df).mark_bar(cornerRadiusEnd=3).encode(
+                        x=alt.X('사용량:Q', title=None),
+                        y=alt.Y('유틸리티:N', sort=UTILITY_ORDER, title=None),
+                        color=alt.Color('유틸리티:N', scale=alt.Scale(domain=UTILITY_ORDER, range=UTILITY_COLORS), legend=None),
+                        tooltip=[alt.Tooltip('유틸리티:N'), alt.Tooltip('사용량:Q'), alt.Tooltip('단위:N')]
+                    ).properties(height=170)
+                    st.altair_chart(mini_bar, use_container_width=True)
+
+    st.markdown("---")
+
+    # --- 5. [3단] 전사 6대 유틸리티 에너지원 월간 누계 통합 비교 ---
+    st.markdown("<div style='font-size:16px;font-weight:800;margin-bottom:8px;'>📊 유틸리티 에너지원 월간 누계 통합 비교 (당월 vs 전월 vs 전년동월)</div>", unsafe_allow_html=True)
+    if not u_df.empty:
+        prev_y, prev_m = (today.year, today.month - 1) if today.month > 1 else (today.year - 1, 12)
         uf['year'] = uf['parsed'].dt.year
         uf['month'] = uf['parsed'].dt.month
-
-        st.markdown("<div class='dash-section-title'>기간 사용량 비교</div><div class='dash-section-desc'>선택한 두 날짜의 계량기 지침값 차이로 실제 사용량을 산정합니다.</div>", unsafe_allow_html=True)
-        d1c, d2c, _ = st.columns([1, 1, 2])
-        with d1c:
-            date1 = st.date_input("기준일 1", value=date.today() - timedelta(days=30), key="dash_date1")
-        with d2c:
-            date2 = st.date_input("기준일 2", value=date.today(), key="dash_date2")
-
-        lo, hi = (date1, date2) if date1 <= date2 else (date2, date1)
-        cmp_rows = []
-        for u_type in UTILITY_ORDER:
-            sub = uf[uf['유틸리티종류'] == u_type]
-            m1 = sub[sub['parsed'] <= pd.Timestamp(lo)]
-            m2 = sub[sub['parsed'] <= pd.Timestamp(hi)]
-            if m1.empty or m2.empty: continue
-            v1 = float(m1.iloc[-1]['지침값'])
-            v2 = float(m2.iloc[-1]['지침값'])
-            cmp_rows.append({
-                '유틸리티': u_type, '사용량': round(max(v2 - v1, 0.0), 1),
-                '단위': get_utility_unit(u_type), '기준일1 지침': v1, '기준일2 지침': v2
-            })
-        cmp_df = pd.DataFrame(cmp_rows)
-
-        if cmp_df.empty:
-            st.warning("선택한 기간에 검침 기록이 없습니다.")
-        else:
-            cmp_df['라벨'] = cmp_df.apply(lambda r: f"{r['사용량']:,.1f} {r['단위']}", axis=1)
-
-            water_df = cmp_df[cmp_df['유틸리티'].isin(WATER_UTILITIES)]
-            lpg_df = cmp_df[cmp_df['유틸리티'] == 'LPG가스']
-            elec_df = cmp_df[cmp_df['유틸리티'] == '전기사용량']
-
-            def create_sub_bar_chart(df_sub, chart_title):
-                base = alt.Chart(df_sub).mark_bar(cornerRadiusEnd=4).encode(
-                    x=alt.X('사용량:Q', title=None),
-                    y=alt.Y('유틸리티:N', sort=UTILITY_ORDER, title=None, axis=alt.Axis(labelFontSize=12)),
-                    color=alt.Color('유틸리티:N', scale=alt.Scale(domain=UTILITY_ORDER, range=UTILITY_COLORS), legend=None),
-                    tooltip=[alt.Tooltip('유틸리티:N', title='구분'), alt.Tooltip('사용량:Q', title='사용량'), alt.Tooltip('단위:N', title='단위')]
-                )
-                text = alt.Chart(df_sub).mark_text(align='left', dx=6, fontSize=12, fontWeight='bold', color='#3b82f6').encode(
-                    x='사용량:Q', y=alt.Y('유틸리티:N', sort=UTILITY_ORDER), text='라벨:N'
-                )
-                return (base + text).properties(height=180, title=chart_title)
-
-            c_w, c_l, c_e = st.columns(3)
-            with c_w:
-                if not water_df.empty:
-                    st.altair_chart(create_sub_bar_chart(water_df, f"💧 급수 계통 사용량 ({lo} ~ {hi})"), use_container_width=True)
-                else: 
-                    st.caption("급수 검침 데이터 없음")
-            with c_l:
-                if not lpg_df.empty:
-                    st.altair_chart(create_sub_bar_chart(lpg_df, f"🔥 LPG 가스 사용량 ({lo} ~ {hi})"), use_container_width=True)
-                else: 
-                    st.caption("LPG 검침 데이터 없음")
-            with c_e:
-                if not elec_df.empty:
-                    st.altair_chart(create_sub_bar_chart(elec_df, f"⚡ 전기 사용량 ({lo} ~ {hi})"), use_container_width=True)
-                else: 
-                    st.caption("전기 검침 데이터 없음")
-
-        st.markdown("---")
-
-        st.markdown("<div class='dash-section-title'>월간 사용량 비교</div><div class='dash-section-desc'>당월 누계, 전월, 전년 동월 사용량을 전체 화면 너비로 비교합니다.</div>", unsafe_allow_html=True)
-        today = date.today()
-        prev_y, prev_m = (today.year, today.month - 1) if today.month > 1 else (today.year - 1, 12)
 
         def month_usage_sum(yy, mm):
             sel = uf[(uf['year'] == yy) & (uf['month'] == mm)]
@@ -1212,25 +1351,6 @@ if menu == "📊 통합 종합 대시보드":
             '전월': month_usage_sum(prev_y, prev_m),
             '전년동월': month_usage_sum(today.year - 1, today.month)
         }
-
-        sel_u = st.selectbox("기준 유틸리티", UTILITY_ORDER, key="dash_month_util")
-        unit = get_utility_unit(sel_u)
-        v_cur = float(sums['당월'].get(sel_u, 0.0))
-        v_prev = float(sums['전월'].get(sel_u, 0.0))
-        v_ly = float(sums['전년동월'].get(sel_u, 0.0))
-        d_prev = v_cur - v_prev
-        d_pct = (d_prev / v_prev * 100) if v_prev > 0 else None
-        cur_sub = "전월 데이터 없음" if d_pct is None else f"전월 대비 {d_pct:+.1f}% ({d_prev:+,.1f} {unit})"
-
-        m1c, m2c, m3c = st.columns(3)
-        with m1c:
-            st.markdown(dash_kpi_card(f"당월 사용량 ({today.year}.{today.month:02d})", f"{v_cur:,.1f} {unit}", cur_sub, accent="#2563eb"), unsafe_allow_html=True)
-        with m2c:
-            st.markdown(dash_kpi_card(f"전월 사용량 ({prev_y}.{prev_m:02d})", f"{v_prev:,.1f} {unit}", "직전 1개월 실적", accent="#60a5fa"), unsafe_allow_html=True)
-        with m3c:
-            st.markdown(dash_kpi_card(f"전년 동월 사용량 ({today.year - 1}.{today.month:02d})", f"{v_ly:,.1f} {unit}", "동월 대비 기준 실적", accent="#94a3b8"), unsafe_allow_html=True)
-
-        st.markdown("<div style='height:12px;'></div>", unsafe_allow_html=True)
 
         long_rows = []
         for lbl, s in sums.items():
@@ -1245,16 +1365,18 @@ if menu == "📊 통합 종합 대시보드":
             y=alt.Y('사용량:Q', title='월간 사용량'),
             color=alt.Color('기간:N', scale=alt.Scale(domain=period_order, range=['#2563eb', '#60a5fa', '#94a3b8']), legend=alt.Legend(title=None, orient='top')),
             tooltip=[alt.Tooltip('유틸리티:N', title='유틸리티'), alt.Tooltip('기간:N', title='구분'), alt.Tooltip('사용량:Q', title='사용량', format=',.1f')]
-        ).properties(height=340, title="전사 6대 유틸리티 월간 사용량 통합 비교 (당월 / 전월 / 전년동월)")
+        ).properties(height=300)
         st.altair_chart(grouped_monthly_chart, use_container_width=True)
+    else:
+        st.info("검침 데이터가 등록되면 월간 비교 그래프가 표시됩니다.")
 
     st.markdown("---")
 
-    st.markdown("<div class='dash-section-title'>실시간 이상 모니터링</div><div class='dash-section-desc'>유틸리티 소비 이상 및 미조치 설비 결함을 상시 감시합니다.</div>", unsafe_allow_html=True)
+    # --- 6. [4단] 실시간 이상 모니터링 & 미조치 결함 조치 센터 ---
     m_col1, m_col2 = st.columns(2)
     
     with m_col1:
-        st.markdown("**유틸리티 이상 감지**")
+        st.markdown("**⚡ 유틸리티 이상 소비 감지 (AI 누수 패턴)**")
         if anomalies:
             for a in anomalies:
                 with st.container(border=True):
@@ -1270,14 +1392,14 @@ if menu == "📊 통합 종합 대시보드":
                 st.success("✨ 6대 에너지원 모두 정상 범위 내 가동 중입니다.")
                 
     with m_col2:
-        st.markdown("**미조치 설비 결함**")
+        st.markdown("**🛠️ 전 설비 미조치 결함 & Action Item**")
         if not unresolved_df.empty:
             with st.container(border=True):
                 st.dataframe(unresolved_df[['점검시간', '소화기ID', '설치위치', '상태', '점검자']], use_container_width=True, height=210)
                 st.caption(f"총 {len(unresolved_df)}건의 결함이 조치 대기 중입니다.")
         else:
             with st.container(border=True):
-                st.success("✨ 미조치 결함 없음. 모든 설비 정상 가동 중.")
+                st.success("✨ 미조치 결함 없음. 모든 소화 방재 설비 정상.")
 
 elif menu == "📋 일일 통합 점검":
     st.markdown("<div class='system-banner'><h3>📋 일일 통합 설비 점검 일지</h3><p>설비실 점검 결과를 원본 서식 구조대로 기록하고 보존합니다.</p></div>", unsafe_allow_html=True)
@@ -1915,6 +2037,7 @@ elif menu == "🧯 소방 펌프 및 밸브 점검":
                     st.error("점검자 성명을 입력해주세요.")
                 else:
                     save_fire_pump_log(fp_date, pump_category, fp_ins, q_data, fp_notes)
+                    st.success(f"✅ {pump_category} 점검표가 저장되었습니다!")
                     st.rerun()
 
     with tab_fp2:
