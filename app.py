@@ -1406,20 +1406,19 @@ elif menu == "📋 일일 통합 점검":
     t1, t2 = st.tabs(["📝 일일 점검표 작성", "📂 점검 기록 조회 (리포트다운로드)"])
 
     with t1:
-        tdy = str(date.today())
-        rec = get_daily_inspection_today(tdy)
+        rd = st.date_input("점검 일자", value=datetime.now(), key="daily_inspection_date")
+        selected_date = str(rd)
+        rec = get_daily_inspection_today(selected_date)
         allow = True
         
         if rec:
-            st.markdown(f"<div class='completed-box'>✅ 오늘({tdy}) 일일 점검 완료 (작성자: {rec[2]})</div>", unsafe_allow_html=True)
-            allow = st.checkbox("🔄 다시 작성(수정)하시겠습니까?", key="chk_redaily")
+            st.markdown(f"<div class='completed-box'>✅ 선택한 날짜({selected_date}) 일일 점검 완료 (작성자: {rec[2]})</div>", unsafe_allow_html=True)
+            allow = st.checkbox("🔄 선택한 날짜의 점검을 다시 작성(수정)하시겠습니까?", key=f"chk_redaily_{selected_date}")
         elif daily_scan_param:
             st.success("📍 [QR 현장 인식 완료] 설비실 일일 점검")
             
         with st.form("exact_form"):
-            c1, c2 = st.columns(2)
-            with c1: rd = st.date_input("점검 일자", value=datetime.now())
-            with c2: rin = st.text_input("점검자 성명", disabled=not allow)
+            rin = st.text_input("점검자 성명", disabled=not allow)
             
             st.markdown("### 1️⃣ Compressor & Air Dryer")
             c_s1, c_s2, c_s3 = st.columns(3)
@@ -1740,30 +1739,36 @@ elif menu == "⚡ 유틸리티 사용량 관리":
     is_u_qr = bool(utility_param)
     cur_u = utility_param if is_u_qr else UTILITY_ORDER[0]
     st.markdown("<div class='system-banner'><h3>⚡ 유틸리티 에너지 검침</h3><p>누수 감지 및 소비량 실시간 모니터링</p></div>", unsafe_allow_html=True)
-    tdy = str(date.today())
-    rec = get_utility_record_today(cur_u, tdy)
+    c1, c2 = st.columns(2)
+    with c1:
+        rd = st.date_input("검침 일자", value=datetime.now(), key="utility_record_date")
+    with c2:
+        u_t = st.selectbox("구분", UTILITY_ORDER, index=UTILITY_ORDER.index(cur_u) if cur_u in UTILITY_ORDER else 0, disabled=is_u_qr, key="utility_type")
+    selected_type = cur_u if is_u_qr else u_t
+    if is_u_qr:
+        st.info(f"QR 지정 계량기: {cur_u}")
+    selected_date = str(rd)
+    rec = get_utility_record_today(selected_type, selected_date)
     allow = True
     
     if rec:
-        st.markdown(f"<div class='completed-box'>✅ 오늘({tdy}) [{cur_u}] 검침 완료 (지침: {rec[3]:,.0f})</div>", unsafe_allow_html=True)
-        allow = st.checkbox("🔄 다시 수정등록")
+        st.markdown(f"<div class='completed-box'>✅ 선택한 날짜({selected_date}) [{selected_type}] 검침 완료 (지침: {rec[3]:,.0f})</div>", unsafe_allow_html=True)
+        allow = st.checkbox("🔄 선택한 검침을 다시 수정등록", key=f"chk_reutil_{selected_date}_{selected_type}")
     elif is_u_qr:
-        st.success(f"📍 [QR 인식 완료] {cur_u}")
+        st.success(f"📍 [QR 인식 완료] {selected_type}")
 
     with st.form("u_form"):
         c1, c2 = st.columns(2)
         with c1:
-            rd = st.date_input("검침 일자", value=datetime.now())
-            u_t = st.selectbox("구분", UTILITY_ORDER, index=UTILITY_ORDER.index(cur_u) if cur_u in UTILITY_ORDER else 0, disabled=is_u_qr)
-        with c2:
             con = st.number_input("지침값", min_value=0.0, step=1.0, value=0.0, disabled=not allow)
+        with c2:
             rn = st.text_input("성명", disabled=not allow)
         nts = st.text_area("특이사항", height=75, disabled=not allow)
         if st.form_submit_button("💾 등록", use_container_width=True, disabled=not allow):
             if not rn.strip(): 
                 st.error("성명 입력")
             else:
-                save_utility_usage(str(rd), cur_u if is_u_qr else u_t, con, rn.strip(), nts)
+                save_utility_usage(selected_date, selected_type, con, rn.strip(), nts)
                 st.rerun()
     st.markdown("---")
     st.subheader("📂 이력 조회")
@@ -1782,19 +1787,18 @@ elif menu == "🧱 밀폐공간 점검":
         if cf_scan_param:
             st.success("📍 [QR 현장 인식 완료] 밀폐공간 통합 점검 모드입니다.")
 
-        today_str = str(date.today())
-        today_cs_record = get_confined_space_today(today_str)
+        cs_date = st.date_input("점검 일자", value=datetime.now(), key="confined_space_date")
+        selected_date = str(cs_date)
+        selected_cs_record = get_confined_space_today(selected_date)
         allow_cs = True
 
-        if today_cs_record:
-            st.markdown(f"<div class='completed-box'>✅ 오늘({today_str}) 밀폐공간 점검이 이미 완료되었습니다. (작성자: {today_cs_record[2]})</div>", unsafe_allow_html=True)
-            allow_cs = st.checkbox("🔄 오늘 점검을 다시 작성(수정)하시겠습니까?", key="chk_re_cs")
+        if selected_cs_record:
+            st.markdown(f"<div class='completed-box'>✅ 선택한 날짜({selected_date}) 밀폐공간 점검이 이미 완료되었습니다. (작성자: {selected_cs_record[2]})</div>", unsafe_allow_html=True)
+            allow_cs = st.checkbox("🔄 선택한 날짜의 점검을 다시 작성(수정)하시겠습니까?", key=f"chk_re_cs_{selected_date}")
 
         with st.form("cs_form"):
             st.markdown("##### 📌 기본 정보")
-            c1, c2 = st.columns(2)
-            with c1: cs_date = st.date_input("점검 일자", value=datetime.now())
-            with c2: cs_ins = st.text_input("점검자 성명", disabled=not allow_cs)
+            cs_ins = st.text_input("점검자 성명", disabled=not allow_cs)
             
             st.markdown("---")
             st.markdown("### 1️⃣ 출입통제 (시건장치 여부)")
@@ -1948,20 +1952,22 @@ elif menu == "🧯 소방 펌프 및 밸브 점검":
         if fp_scan_param:
             st.success("📍 [QR 현장 인식 완료] 소방펌프/밸브 점검 모드입니다.")
 
-        pump_category = st.selectbox("📌 점검할 설비를 선택하세요", ["1. 소방 엔진펌프 점검", "2. 소방 전기펌프 점검", "3. 스프링클러 밸브점검"])
+        c1, c2 = st.columns(2)
+        with c1:
+            pump_category = st.selectbox("📌 점검할 설비를 선택하세요", ["1. 소방 엔진펌프 점검", "2. 소방 전기펌프 점검", "3. 스프링클러 밸브점검"], key="fire_pump_category")
+        with c2:
+            fp_date = st.date_input("점검 일자", value=datetime.now(), key="fire_pump_date")
         
-        today_str = str(date.today())
-        today_fp_record = get_fire_pump_today(pump_category, today_str)
+        selected_date = str(fp_date)
+        selected_fp_record = get_fire_pump_today(pump_category, selected_date)
         allow_fp = True
 
-        if today_fp_record:
-            st.markdown(f"<div class='completed-box'>✅ 오늘({today_str}) 해당 설비({pump_category}) 점검이 이미 완료되었습니다. (작성자: {today_fp_record[2]})</div>", unsafe_allow_html=True)
-            allow_fp = st.checkbox("🔄 오늘 점검을 다시 작성(수정)하시겠습니까?", key=f"chk_re_{pump_category}")
+        if selected_fp_record:
+            st.markdown(f"<div class='completed-box'>✅ 선택한 날짜({selected_date}) 해당 설비({pump_category}) 점검이 이미 완료되었습니다. (작성자: {selected_fp_record[2]})</div>", unsafe_allow_html=True)
+            allow_fp = st.checkbox("🔄 선택한 날짜의 점검을 다시 작성(수정)하시겠습니까?", key=f"chk_re_{selected_date}_{pump_category}")
 
         with st.form(f"fp_form_{pump_category}"):
-            c1, c2 = st.columns(2)
-            with c1: fp_date = st.date_input("점검 일자", value=datetime.now())
-            with c2: fp_ins = st.text_input("점검자 성명", disabled=not allow_fp)
+            fp_ins = st.text_input("점검자 성명", disabled=not allow_fp)
             st.markdown("---")
 
             q_data = {}
